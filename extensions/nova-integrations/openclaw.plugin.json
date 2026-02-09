@@ -1,0 +1,8 @@
+{
+  "id": "nova-integrations",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
