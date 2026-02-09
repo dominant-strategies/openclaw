@@ -1111,6 +1111,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/nova-integrations:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/open-prose:
     devDependencies:
       '@openclaw/plugin-sdk':
