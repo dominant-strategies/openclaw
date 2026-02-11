@@ -63,6 +63,7 @@ import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/cli
 import { isProtectedPluginRoutePath } from "./security-path.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { handleWhatsAppQrHttpRequest } from "./whatsapp-qr-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -523,7 +524,13 @@ export function createGatewayHttpServer(opts: {
         })
       ) {
         return;
-      }
+      if (
+        await handleWhatsAppQrHttpRequest(req, res, {
+          auth: resolvedAuth,
+          trustedProxies,
+        })
+      )
+        return;
       if (await handleSlackHttpRequest(req, res)) {
         return;
       }
