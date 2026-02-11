@@ -474,6 +474,7 @@ export function createGatewayHttpServer(opts: {
         })
       ) {
         return;
+      }
       if (
         await handleWhatsAppQrHttpRequest(req, res, {
           auth: resolvedAuth,
