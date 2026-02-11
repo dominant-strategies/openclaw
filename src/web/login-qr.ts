@@ -202,6 +202,180 @@ export async function startWebLoginWithQr(
   };
 }
 
+export async function getWebLoginSnapshot(
+  opts: { accountId?: string; runtime?: RuntimeEnv } = {},
+): Promise<{
+  status: "idle" | "pending" | "ready" | "connected" | "error" | "linked";
+  message: string;
+  qrDataUrl?: string;
+  connected?: boolean;
+  error?: string;
+  errorStatus?: number;
+}> {
+  const runtime = opts.runtime ?? defaultRuntime;
+  const cfg = loadConfig();
+  const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
+  const active = activeLogins.get(account.accountId);
+  if (active && isLoginFresh(active)) {
+    if (active.qrDataUrl) {
+      return {
+        status: "ready",
+        message: "QR already active. Scan it in WhatsApp → Linked Devices.",
+        qrDataUrl: active.qrDataUrl,
+        connected: active.connected,
+        error: active.error,
+        errorStatus: active.errorStatus,
+      };
+    }
+    if (active.connected) {
+      return {
+        status: "connected",
+        message: "WhatsApp is linked.",
+        connected: true,
+      };
+    }
+    if (active.error) {
+      // Handle 515 "Stream Errored" by auto-restarting the socket (same as waitForWebLogin)
+      if (active.errorStatus === 515) {
+        const restarted = await restartLoginSocket(active, runtime);
+        if (restarted) {
+          return {
+            status: "pending",
+            message: "WhatsApp connection restarting (normal after scan)...",
+            qrDataUrl: active.qrDataUrl,
+            connected: false,
+          };
+        }
+      }
+      return {
+        status: "error",
+        message: active.error,
+        error: active.error,
+        errorStatus: active.errorStatus,
+      };
+    }
+    return {
+      status: "pending",
+      message: "Waiting for WhatsApp QR...",
+      connected: active.connected,
+    };
+  }
+
+  const hasWeb = await webAuthExists(account.authDir);
+  if (hasWeb) {
+    const selfId = readWebSelfId(account.authDir);
+    const who = selfId.e164 ?? selfId.jid ?? "unknown";
+    return {
+      status: "linked",
+      message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
+    };
+  }
+
+  return {
+    status: "idle",
+    message: "No active WhatsApp login in progress.",
+  };
+}
+
+export async function ensureWebLogin(
+  opts: {
+    verbose?: boolean;
+    force?: boolean;
+    accountId?: string;
+    runtime?: RuntimeEnv;
+  } = {},
+): Promise<{
+  status: "pending" | "ready" | "connected" | "error" | "linked";
+  message: string;
+  qrDataUrl?: string;
+  connected?: boolean;
+  error?: string;
+  errorStatus?: number;
+}> {
+  const runtime = opts.runtime ?? defaultRuntime;
+  const cfg = loadConfig();
+  const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
+  const hasWeb = await webAuthExists(account.authDir);
+  const selfId = readWebSelfId(account.authDir);
+  if (hasWeb && !opts.force) {
+    const who = selfId.e164 ?? selfId.jid ?? "unknown";
+    return {
+      status: "linked",
+      message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
+    };
+  }
+
+  const existing = activeLogins.get(account.accountId);
+  if (existing && isLoginFresh(existing)) {
+    if (existing.qrDataUrl) {
+      return {
+        status: "ready",
+        message: "QR already active. Scan it in WhatsApp → Linked Devices.",
+        qrDataUrl: existing.qrDataUrl,
+        connected: existing.connected,
+        error: existing.error,
+        errorStatus: existing.errorStatus,
+      };
+    }
+    return {
+      status: "pending",
+      message: "Waiting for WhatsApp QR...",
+      connected: existing.connected,
+    };
+  }
+
+  await resetActiveLogin(account.accountId);
+
+  let sock: WaSocket;
+  let pendingQr: string | null = null;
+  try {
+    sock = await createWaSocket(false, Boolean(opts.verbose), {
+      authDir: account.authDir,
+      onQr: (qr: string) => {
+        if (pendingQr) return;
+        pendingQr = qr;
+        const current = activeLogins.get(account.accountId);
+        if (current && !current.qr) current.qr = qr;
+        runtime.log(info("WhatsApp QR received."));
+        void renderQrPngBase64(qr).then((base64) => {
+          const active = activeLogins.get(account.accountId);
+          if (!active || active.qr !== qr) return;
+          active.qrDataUrl = `data:image/png;base64,${base64}`;
+        });
+      },
+    });
+  } catch (err) {
+    await resetActiveLogin(account.accountId);
+    return {
+      status: "error",
+      message: `Failed to start WhatsApp login: ${String(err)}`,
+      error: String(err),
+    };
+  }
+
+  const login: ActiveLogin = {
+    accountId: account.accountId,
+    authDir: account.authDir,
+    isLegacyAuthDir: account.isLegacyAuthDir,
+    id: randomUUID(),
+    sock,
+    startedAt: Date.now(),
+    connected: false,
+    waitPromise: Promise.resolve(),
+    restartAttempted: false,
+    verbose: Boolean(opts.verbose),
+  };
+  activeLogins.set(account.accountId, login);
+  if (pendingQr && !login.qr) login.qr = pendingQr;
+  attachLoginWaiter(account.accountId, login);
+
+  return {
+    status: "pending",
+    message: "Waiting for WhatsApp QR...",
+    connected: false,
+  };
+}
+
 export async function waitForWebLogin(
   opts: { timeoutMs?: number; runtime?: RuntimeEnv; accountId?: string } = {},
 ): Promise<{ connected: boolean; message: string }> {

@@ -30,6 +30,7 @@ import { applyHookMappings } from "./hooks-mapping.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { handleWhatsAppQrHttpRequest } from "./whatsapp-qr-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -241,6 +242,13 @@ export function createGatewayHttpServer(opts: {
       if (await handleHooksRequest(req, res)) return;
       if (
         await handleToolsInvokeHttpRequest(req, res, {
+          auth: resolvedAuth,
+          trustedProxies,
+        })
+      )
+        return;
+      if (
+        await handleWhatsAppQrHttpRequest(req, res, {
           auth: resolvedAuth,
           trustedProxies,
         })
