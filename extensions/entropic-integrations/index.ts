@@ -9,9 +9,9 @@ import {
 } from "./src/gmail-tools.js";
 
 const plugin = {
-  id: "nova-integrations",
-  name: "Nova Integrations",
-  description: "OAuth bridge tools for Nova integrations",
+  id: "entropic-integrations",
+  name: "Entropic Integrations",
+  description: "OAuth bridge tools for Entropic integrations",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     registerIntegrationGatewayMethods(api);
