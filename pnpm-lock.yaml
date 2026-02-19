@@ -365,6 +365,12 @@ importers:
 
   extensions/elevenlabs: {}
 
+  extensions/entropic-integrations:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/exa: {}
 
   extensions/fal: {}
