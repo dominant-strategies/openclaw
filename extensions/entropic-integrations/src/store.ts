@@ -1,7 +1,7 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 export type IntegrationRecord = {
   provider: string;
@@ -77,7 +77,7 @@ export function upsertIntegration(api: OpenClawPluginApi, record: IntegrationRec
     updated_at: Date.now(),
   };
   saveIntegrationStoreSync(filePath, store);
-  api.logger.info(`[nova-integrations] stored ${record.provider} tokens`);
+  api.logger.info(`[entropic-integrations] stored ${record.provider} tokens`);
 }
 
 export function removeIntegration(api: OpenClawPluginApi, provider: string) {
@@ -86,7 +86,7 @@ export function removeIntegration(api: OpenClawPluginApi, provider: string) {
   if (store.integrations[provider]) {
     delete store.integrations[provider];
     saveIntegrationStoreSync(filePath, store);
-    api.logger.info(`[nova-integrations] removed ${provider} tokens`);
+    api.logger.info(`[entropic-integrations] removed ${provider} tokens`);
   }
 }
 

@@ -16,5 +16,5 @@ export async function getGoogleAccessToken(provider: string): Promise<string> {
   if (expiresAt - now > 5 * 60 * 1000) {
     return record.access_token;
   }
-  throw new Error(`${provider} access token expired. Refresh in Nova.`);
+  throw new Error(`${provider} access token expired. Refresh in Entropic.`);
 }
