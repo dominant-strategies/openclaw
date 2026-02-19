@@ -299,6 +299,12 @@ importers:
 
   extensions/discord: {}
 
+  extensions/entropic-integrations:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
