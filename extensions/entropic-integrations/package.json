@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/nova-integrations",
+  "name": "@openclaw/entropic-integrations",
   "version": "2026.2.6-3",
-  "description": "Nova OAuth integration bridge",
+  "description": "Entropic OAuth integration bridge",
   "type": "module",
   "devDependencies": {
     "openclaw": "workspace:*"
