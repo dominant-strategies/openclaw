@@ -631,6 +631,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/entropic-integrations:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/exa:
     devDependencies:
       '@openclaw/plugin-sdk':
