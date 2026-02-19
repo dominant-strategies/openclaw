@@ -1,5 +1,5 @@
 {
-  "id": "nova-integrations",
+  "id": "entropic-integrations",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
