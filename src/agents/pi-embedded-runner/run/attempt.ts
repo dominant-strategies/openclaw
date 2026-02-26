@@ -770,6 +770,34 @@ export async function runEmbeddedAttempt(
         };
       }
 
+      // All providers need orphaned tool_result repair on every outbound request,
+      // not just at run start. Auto-compaction calls buildSessionContext() +
+      // replaceMessages() from raw disk entries, bypassing the startup repair
+      // applied in attempt.ts. This wrapper ensures every API call has a valid
+      // tool_use / tool_result pairing, preventing "No tool call found for
+      // function call output" 400 errors from providers like OpenAI.
+      if (transcriptPolicy.repairToolUseResultPairing) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(model, context, options);
+          }
+          const sanitized = sanitizeToolUseResultPairing(
+            messages as unknown as AgentMessage[],
+          ) as unknown;
+          if (sanitized === messages) {
+            return inner(model, context, options);
+          }
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(model, nextContext as typeof context, options);
+        };
+      }
+
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
