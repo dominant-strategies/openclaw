@@ -83,10 +83,19 @@ export function resolveTranscriptPolicy(params: {
     (!isOpenAi &&
       (params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses"));
 
-  // Anthropic Claude endpoints can reject replayed `thinking` blocks unless the
-  // original signatures are preserved byte-for-byte. Drop them at send-time to
-  // keep persisted sessions usable across follow-up turns.
-  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({ provider, modelId });
+  // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
+  // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
+  // Drop these blocks at send-time to keep sessions usable.
+  //
+  // openai-completions providers (e.g. openrouter with gpt-5.2) return reasoning
+  // in a `reasoning` field on the delta, which pi-ai stores as a thinking block
+  // with thinkingSignature: "reasoning". When replayed, openai-completions.js
+  // sets assistantMsg["reasoning"] = "..." which causes the model to reject
+  // subsequent tool results with "No tool call found for function call output".
+  // Drop these blocks so the reasoning is not sent back in history.
+  const isOpenAiCompletions = params.modelApi === "openai-completions";
+  const dropThinkingBlocks =
+    shouldDropThinkingBlocksForModel({ provider, modelId }) || isOpenAiCompletions;
 
   const needsNonImageSanitize =
     isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;
