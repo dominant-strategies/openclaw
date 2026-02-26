@@ -254,12 +254,38 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     // Skip tool call extraction for aborted or errored assistant messages.
     // When stopReason is "error" or "aborted", the tool_use blocks may be incomplete
     // (e.g., partialJson: true) and should not have synthetic tool_results created.
-    // Creating synthetic results for incomplete tool calls causes API 400 errors:
-    // "unexpected tool_use_id found in tool_result blocks"
-    // See: https://github.com/openclaw/openclaw/issues/4597
+    // However, we must also drop any tool_result blocks that immediately follow this
+    // assistant turn and reference its (incomplete) tool calls — otherwise Anthropic
+    // rejects with "unexpected tool_use_id found in tool_result blocks".
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
+      // Collect the IDs of any tool calls in this incomplete assistant turn so we
+      // can drop matching tool_results that follow it.
+      const incompleteCalls = extractToolCallsFromAssistant(assistant);
+      const incompleteIds = new Set(incompleteCalls.map((t) => t.id));
       out.push(msg);
+      if (incompleteIds.size > 0) {
+        // Drop tool_result messages directly following this turn that reference
+        // one of the incomplete tool calls.
+        while (i + 1 < messages.length) {
+          const peek = messages[i + 1];
+          if (!peek || typeof peek !== "object") {
+            break;
+          }
+          const peekRole = (peek as { role?: unknown }).role;
+          if (peekRole !== "toolResult") {
+            break;
+          }
+          const peekId = extractToolResultId(peek as Extract<AgentMessage, { role: "toolResult" }>);
+          if (peekId && incompleteIds.has(peekId)) {
+            droppedOrphanCount += 1;
+            changed = true;
+            i += 1; // skip this tool_result
+          } else {
+            break;
+          }
+        }
+      }
       continue;
     }
 
