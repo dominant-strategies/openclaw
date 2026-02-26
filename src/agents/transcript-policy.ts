@@ -100,6 +100,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
   }
 
   const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  const shouldDropOpenAiCompatibleThinkingBlocks = params.modelApi === "openai-completions";
   return {
     ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
     ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization
@@ -117,6 +118,10 @@ function buildUnownedProviderTransportReplayFallback(params: {
           },
         }
       : {}),
+    // openai-completions providers can persist `reasoning` deltas as thinking
+    // blocks. Replaying them injects `assistantMsg.reasoning`, which causes
+    // subsequent tool results to be rejected by compatible APIs.
+    ...(shouldDropOpenAiCompatibleThinkingBlocks ? { dropThinkingBlocks: true } : {}),
     ...(isAnthropic && modelId.includes("claude")
       ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) }
       : {}),
