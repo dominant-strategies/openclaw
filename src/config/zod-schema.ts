@@ -778,6 +778,26 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    mcpServers: z
+      .record(
+        z.string(),
+        z
+          .object({
+            url: z.string().url(),
+            transport: z.literal("streamable-http").optional(),
+            enabled: z.boolean().optional(),
+            headers: z.record(z.string(), z.string()).optional(),
+            toolPrefix: z.string().optional(),
+            oauth: z
+              .object({
+                accessToken: z.string().optional().register(sensitive),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict(),
+      )
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

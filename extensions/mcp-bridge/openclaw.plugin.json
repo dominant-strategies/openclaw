@@ -1,0 +1,15 @@
+{
+  "id": "mcp-bridge",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "servers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object"
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}
