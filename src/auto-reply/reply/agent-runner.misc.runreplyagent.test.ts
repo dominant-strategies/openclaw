@@ -215,6 +215,31 @@ describe("runReplyAgent onAgentRunStart", () => {
     expect(onAgentRunStart).toHaveBeenCalledWith("run-started");
     expect(result).toMatchObject({ text: "ok" });
   });
+
+  it("uses lightweight embedded profile for ollama webchat runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    await createRun({
+      provider: "ollama",
+      model: "qwen2.5-coder:7b",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      provider?: string;
+      bootstrapContextMode?: string;
+      promptModeOverride?: string;
+      disableMessageTool?: boolean;
+    };
+
+    expect(call.provider).toBe("ollama");
+    expect(call.bootstrapContextMode).toBe("lightweight");
+    expect(call.promptModeOverride).toBe("minimal");
+    expect(call.disableMessageTool).toBe(true);
+  });
 });
 
 describe("runReplyAgent authProfileId fallback scoping", () => {

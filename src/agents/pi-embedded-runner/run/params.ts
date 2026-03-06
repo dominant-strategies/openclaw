@@ -8,6 +8,7 @@ import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
+import type { PromptMode } from "../../system-prompt.js";
 
 // Simplified tool definition for client-provided tools (OpenResponses hosted tools)
 export type ClientToolDefinition = {
@@ -83,6 +84,8 @@ export type RunEmbeddedPiAgentParams = {
   suppressToolErrorWarnings?: boolean;
   /** Bootstrap context mode for workspace file injection. */
   bootstrapContextMode?: "full" | "lightweight";
+  /** Optional prompt mode override for specific runtime/model combinations. */
+  promptModeOverride?: PromptMode;
   /** Run kind hint for context mode behavior. */
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */

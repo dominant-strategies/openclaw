@@ -599,7 +599,13 @@ export function composeSystemPromptWithHookContext(params: {
   );
 }
 
-export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
+export function resolvePromptModeForSession(
+  sessionKey?: string,
+  override?: "minimal" | "full",
+): "minimal" | "full" {
+  if (override) {
+    return override;
+  }
   if (!sessionKey) {
     return "full";
   }
@@ -915,7 +921,7 @@ export async function runEmbeddedAttempt(
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
-    const promptMode = resolvePromptModeForSession(params.sessionKey);
+    const promptMode = resolvePromptModeForSession(params.sessionKey, params.promptModeOverride);
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],

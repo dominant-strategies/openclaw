@@ -98,6 +98,10 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
+  const shouldUseLightweightLocalWebchatProfile = (provider: string): boolean =>
+    provider.trim().toLowerCase() === "ollama" &&
+    params.followupRun.run.messageProvider?.trim().toLowerCase() === "webchat";
+
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
@@ -306,6 +310,8 @@ export async function runAgentTurnWithFallback(params: {
             authProfile,
           });
           return (async () => {
+            const useLightweightLocalWebchatProfile =
+              shouldUseLightweightLocalWebchatProfile(provider);
             const result = await runEmbeddedPiAgent({
               ...embeddedContext,
               trigger: params.isHeartbeat ? "heartbeat" : "user",
@@ -328,7 +334,11 @@ export async function runAgentTurnWithFallback(params: {
                 return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
               })(),
               suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
-              bootstrapContextMode: params.opts?.bootstrapContextMode,
+              bootstrapContextMode:
+                params.opts?.bootstrapContextMode ??
+                (useLightweightLocalWebchatProfile ? "lightweight" : undefined),
+              promptModeOverride: useLightweightLocalWebchatProfile ? "minimal" : undefined,
+              disableMessageTool: useLightweightLocalWebchatProfile,
               bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
               images: params.opts?.images,
               abortSignal: params.opts?.abortSignal,

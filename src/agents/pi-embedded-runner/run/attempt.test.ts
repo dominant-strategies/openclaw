@@ -133,6 +133,11 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession("agent:main:subagent:child")).toBe("minimal");
   });
 
+  it("honors explicit prompt mode override", () => {
+    expect(resolvePromptModeForSession("agent:main:cron:job-1", "minimal")).toBe("minimal");
+    expect(resolvePromptModeForSession("agent:main:subagent:child", "full")).toBe("full");
+  });
+
   it("uses full mode for cron sessions", () => {
     expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("full");
