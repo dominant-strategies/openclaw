@@ -288,6 +288,8 @@ importers:
 
   extensions/byteplus: {}
 
+  extensions/chutes: {}
+
   extensions/cloudflare-ai-gateway: {}
 
   extensions/copilot-proxy: {}
@@ -496,12 +498,6 @@ importers:
   extensions/nvidia: {}
 
   extensions/ollama: {}
-
-  extensions/nova-integrations:
-    devDependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
 
   extensions/open-prose: {}
 
