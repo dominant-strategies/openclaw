@@ -554,12 +554,6 @@ importers:
 
   extensions/ollama: {}
 
-  extensions/nova-integrations:
-    devDependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
-
   extensions/open-prose: {}
 
   extensions/openai: {}
