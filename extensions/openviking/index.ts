@@ -1,0 +1,660 @@
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { Type } from "@sinclair/typebox";
+import {
+  OpenVikingClient,
+  localClientCache,
+  localClientPendingPromises,
+  isMemoryUri,
+  type FindResultItem,
+  type PendingClientEntry,
+} from "./client.js";
+import { memoryOpenVikingConfigSchema } from "./config.js";
+import { createMemoryOpenVikingContextEngine } from "./context-engine.js";
+import {
+  clampScore,
+  postProcessMemories,
+  formatMemoryLines,
+  toJsonLog,
+  summarizeInjectionMemories,
+  pickMemoriesForInjection,
+} from "./memory-ranking.js";
+import {
+  IS_WIN,
+  waitForHealth,
+  quickRecallPrecheck,
+  withTimeout,
+  resolvePythonCommand,
+  prepareLocalPort,
+} from "./process-manager.js";
+import { isTranscriptLikeIngest, extractLatestUserText } from "./text-utils.js";
+
+type PluginLogger = {
+  debug?: (message: string) => void;
+  info: (message: string) => void;
+  warn?: (message: string) => void;
+  error: (message: string) => void;
+};
+
+type HookAgentContext = {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
+const MAX_OPENVIKING_STDERR_LINES = 200;
+const MAX_OPENVIKING_STDERR_CHARS = 256_000;
+const AUTO_RECALL_TIMEOUT_MS = 5_000;
+
+const contextEnginePlugin = {
+  id: "openviking",
+  name: "Context Engine (OpenViking)",
+  description: "OpenViking-backed context-engine memory with auto-recall/capture",
+  kind: "context-engine" as const,
+  configSchema: memoryOpenVikingConfigSchema,
+
+  register(api: {
+    pluginConfig?: unknown;
+    logger: PluginLogger;
+    registerTool: (
+      tool: {
+        name: string;
+        label: string;
+        description: string;
+        parameters: unknown;
+        execute: (_toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+      },
+      opts?: { name?: string; names?: string[] },
+    ) => void;
+    registerService: (service: {
+      id: string;
+      start: (ctx?: unknown) => void | Promise<void>;
+      stop?: (ctx?: unknown) => void | Promise<void>;
+    }) => void;
+    registerContextEngine?: (id: string, factory: () => unknown) => void;
+    on: (
+      hookName: string,
+      handler: (event: unknown, ctx?: HookAgentContext) => unknown,
+      opts?: { priority?: number },
+    ) => void;
+  }) {
+    const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
+    const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}`;
+
+    let clientPromise: Promise<OpenVikingClient>;
+    let localProcess: ReturnType<typeof spawn> | null = null;
+    let resolveLocalClient: ((client: OpenVikingClient) => void) | null = null;
+    let rejectLocalClient: ((err: unknown) => void) | null = null;
+
+    if (cfg.mode === "local") {
+      const cached = localClientCache.get(localCacheKey);
+      if (cached) {
+        localProcess = cached.process;
+        clientPromise = Promise.resolve(cached.client);
+      } else {
+        const existingPending = localClientPendingPromises.get(localCacheKey);
+        if (existingPending) {
+          clientPromise = existingPending.promise;
+        } else {
+          const entry = {} as PendingClientEntry;
+          entry.promise = new Promise<OpenVikingClient>((resolve, reject) => {
+            entry.resolve = resolve;
+            entry.reject = reject;
+          });
+          clientPromise = entry.promise;
+          localClientPendingPromises.set(localCacheKey, entry);
+        }
+      }
+    } else {
+      clientPromise = Promise.resolve(
+        new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs),
+      );
+    }
+
+    const getClient = (): Promise<OpenVikingClient> => clientPromise;
+
+    api.registerTool(
+      {
+        name: "memory_recall",
+        label: "Memory Recall (OpenViking)",
+        description:
+          "Search long-term memories from OpenViking. Use when you need past preferences, facts, or decisions.",
+        parameters: Type.Object({
+          query: Type.String({ description: "Search query" }),
+          limit: Type.Optional(Type.Number({ description: "Maximum results" })),
+          scoreThreshold: Type.Optional(Type.Number({ description: "Minimum score (0-1)" })),
+          targetUri: Type.Optional(Type.String({ description: "Search scope URI" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const { query } = params as { query: string };
+          const limit =
+            typeof (params as { limit?: number }).limit === "number"
+              ? Math.max(1, Math.floor((params as { limit: number }).limit))
+              : cfg.recallLimit;
+          const scoreThreshold =
+            typeof (params as { scoreThreshold?: number }).scoreThreshold === "number"
+              ? Math.max(0, Math.min(1, (params as { scoreThreshold: number }).scoreThreshold))
+              : cfg.recallScoreThreshold;
+          const targetUri =
+            typeof (params as { targetUri?: string }).targetUri === "string"
+              ? (params as { targetUri: string }).targetUri
+              : undefined;
+          const requestLimit = Math.max(limit * 4, 20);
+
+          let result;
+          if (targetUri) {
+            result = await (
+              await getClient()
+            ).find(query, {
+              targetUri,
+              limit: requestLimit,
+              scoreThreshold: 0,
+            });
+          } else {
+            const [userSettled, agentSettled] = await Promise.allSettled([
+              (await getClient()).find(query, {
+                targetUri: "viking://user/memories",
+                limit: requestLimit,
+                scoreThreshold: 0,
+              }),
+              (await getClient()).find(query, {
+                targetUri: "viking://agent/memories",
+                limit: requestLimit,
+                scoreThreshold: 0,
+              }),
+            ]);
+            const userResult =
+              userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
+            const agentResult =
+              agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
+            const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
+            const uniqueMemories = allMemories.filter(
+              (memory, index, self) => index === self.findIndex((item) => item.uri === memory.uri),
+            );
+            const leafOnly = uniqueMemories.filter((memory) => memory.level === 2);
+            result = {
+              memories: leafOnly,
+              total: leafOnly.length,
+            };
+          }
+
+          const memories = postProcessMemories(result.memories ?? [], {
+            limit,
+            scoreThreshold,
+          });
+          if (memories.length === 0) {
+            return {
+              content: [{ type: "text", text: "No relevant OpenViking memories found." }],
+              details: { count: 0, total: result.total ?? 0, scoreThreshold },
+            };
+          }
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Found ${memories.length} memories:\n\n${formatMemoryLines(memories)}`,
+              },
+            ],
+            details: {
+              count: memories.length,
+              memories,
+              total: result.total ?? memories.length,
+              scoreThreshold,
+              requestLimit,
+            },
+          };
+        },
+      },
+      { name: "memory_recall" },
+    );
+
+    api.registerTool(
+      {
+        name: "memory_store",
+        label: "Memory Store (OpenViking)",
+        description:
+          "Store text in OpenViking memory pipeline by writing to a session and running extraction.",
+        parameters: Type.Object({
+          text: Type.String({ description: "Information to store as memory source text" }),
+          role: Type.Optional(Type.String({ description: "Session role, defaults to user" })),
+          sessionId: Type.Optional(Type.String({ description: "Existing OpenViking session ID" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const { text } = params as { text: string };
+          const role =
+            typeof (params as { role?: string }).role === "string"
+              ? (params as { role: string }).role
+              : "user";
+          const sessionIdIn = (params as { sessionId?: string }).sessionId;
+
+          let sessionId = sessionIdIn;
+          let createdTempSession = false;
+          try {
+            const client = await getClient();
+            if (!sessionId) {
+              sessionId = await client.createSession();
+              createdTempSession = true;
+            }
+            await client.addSessionMessage(sessionId, role, text);
+            const extracted = await client.extractSessionMemories(sessionId);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Stored in OpenViking session ${sessionId} and extracted ${extracted.length} memories.`,
+                },
+              ],
+              details: { action: "stored", sessionId, extractedCount: extracted.length, extracted },
+            };
+          } finally {
+            if (createdTempSession && sessionId) {
+              const client = await getClient().catch(() => null);
+              if (client) {
+                await client.deleteSession(sessionId).catch(() => {});
+              }
+            }
+          }
+        },
+      },
+      { name: "memory_store" },
+    );
+
+    api.registerTool(
+      {
+        name: "memory_forget",
+        label: "Memory Forget (OpenViking)",
+        description:
+          "Forget a memory by URI, or search then delete when there is a strong single match.",
+        parameters: Type.Object({
+          uri: Type.Optional(Type.String({ description: "Exact memory URI to delete" })),
+          query: Type.Optional(Type.String({ description: "Search query to find memory URI" })),
+          targetUri: Type.Optional(Type.String({ description: "Search scope URI" })),
+          limit: Type.Optional(Type.Number({ description: "Search limit" })),
+          scoreThreshold: Type.Optional(Type.Number({ description: "Minimum score (0-1)" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const uri = (params as { uri?: string }).uri;
+          if (uri) {
+            if (!isMemoryUri(uri)) {
+              return {
+                content: [{ type: "text", text: `Refusing to delete non-memory URI: ${uri}` }],
+                details: { action: "rejected", uri },
+              };
+            }
+            await (await getClient()).deleteUri(uri);
+            return {
+              content: [{ type: "text", text: `Forgotten: ${uri}` }],
+              details: { action: "deleted", uri },
+            };
+          }
+
+          const query = (params as { query?: string }).query;
+          if (!query) {
+            return {
+              content: [{ type: "text", text: "Provide uri or query." }],
+              details: { error: "missing_param" },
+            };
+          }
+
+          const limit =
+            typeof (params as { limit?: number }).limit === "number"
+              ? Math.max(1, Math.floor((params as { limit: number }).limit))
+              : 5;
+          const scoreThreshold =
+            typeof (params as { scoreThreshold?: number }).scoreThreshold === "number"
+              ? Math.max(0, Math.min(1, (params as { scoreThreshold: number }).scoreThreshold))
+              : cfg.recallScoreThreshold;
+          const targetUri =
+            typeof (params as { targetUri?: string }).targetUri === "string"
+              ? (params as { targetUri: string }).targetUri
+              : cfg.targetUri;
+          const requestLimit = Math.max(limit * 4, 20);
+
+          const result = await (
+            await getClient()
+          ).find(query, {
+            targetUri,
+            limit: requestLimit,
+            scoreThreshold: 0,
+          });
+          const candidates = postProcessMemories(result.memories ?? [], {
+            limit: requestLimit,
+            scoreThreshold,
+            leafOnly: true,
+          }).filter((item) => isMemoryUri(item.uri));
+          if (candidates.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "No matching leaf memory candidates found. Try a more specific query.",
+                },
+              ],
+              details: { action: "none", scoreThreshold },
+            };
+          }
+          const top = candidates[0];
+          if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
+            await (await getClient()).deleteUri(top.uri);
+            return {
+              content: [{ type: "text", text: `Forgotten: ${top.uri}` }],
+              details: { action: "deleted", uri: top.uri, score: top.score ?? 0 },
+            };
+          }
+
+          const list = candidates
+            .map((item) => `- ${item.uri} (${(clampScore(item.score) * 100).toFixed(0)}%)`)
+            .join("\n");
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Found ${candidates.length} candidates. Specify uri:\n${list}`,
+              },
+            ],
+            details: { action: "candidates", candidates, scoreThreshold, requestLimit },
+          };
+        },
+      },
+      { name: "memory_forget" },
+    );
+
+    const sessionAgentIds = new Map<string, string>();
+    const rememberSessionAgentId = (ctx: HookAgentContext) => {
+      if (!ctx?.agentId) {
+        return;
+      }
+      if (ctx.sessionId) {
+        sessionAgentIds.set(ctx.sessionId, ctx.agentId);
+      }
+      if (ctx.sessionKey) {
+        sessionAgentIds.set(ctx.sessionKey, ctx.agentId);
+      }
+    };
+    const resolveAgentId = (sessionId: string): string =>
+      sessionAgentIds.get(sessionId) ?? cfg.agentId;
+
+    api.on("session_start", async (_event, ctx) => {
+      rememberSessionAgentId(ctx ?? {});
+    });
+    api.on("session_end", async (_event, ctx) => {
+      rememberSessionAgentId(ctx ?? {});
+    });
+
+    api.on("before_prompt_build", async (event: unknown, ctx?: HookAgentContext) => {
+      rememberSessionAgentId(ctx ?? {});
+
+      const hookSessionId = ctx?.sessionId ?? ctx?.sessionKey ?? "";
+      const resolvedAgentId = resolveAgentId(hookSessionId);
+      let client: OpenVikingClient;
+      try {
+        client = await withTimeout(
+          getClient(),
+          5000,
+          "openviking: client initialization timeout (service not ready yet)",
+        );
+      } catch (err) {
+        api.logger.warn?.(`openviking: failed to get client: ${String(err)}`);
+        return;
+      }
+
+      if (resolvedAgentId && client.getAgentId() !== resolvedAgentId) {
+        client.setAgentId(resolvedAgentId);
+        api.logger.info(
+          `openviking: switched to agentId=${resolvedAgentId} for before_prompt_build`,
+        );
+      }
+
+      const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
+      const queryText =
+        extractLatestUserText(eventObj.messages) ||
+        (typeof eventObj.prompt === "string" ? eventObj.prompt.trim() : "");
+      if (!queryText) {
+        return;
+      }
+
+      const prependContextParts: string[] = [];
+      if (cfg.autoRecall && queryText.length >= 5) {
+        const precheck = await quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess);
+        if (!precheck.ok) {
+          const reason = precheck.reason;
+          api.logger.info(`openviking: skipping auto-recall because precheck failed (${reason})`);
+        } else {
+          try {
+            await withTimeout(
+              (async () => {
+                const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+                const [userSettled, agentSettled] = await Promise.allSettled([
+                  client.find(queryText, {
+                    targetUri: "viking://user/memories",
+                    limit: candidateLimit,
+                    scoreThreshold: 0,
+                  }),
+                  client.find(queryText, {
+                    targetUri: "viking://agent/memories",
+                    limit: candidateLimit,
+                    scoreThreshold: 0,
+                  }),
+                ]);
+                const userResult =
+                  userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
+                const agentResult =
+                  agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
+
+                const allMemories = [
+                  ...(userResult.memories ?? []),
+                  ...(agentResult.memories ?? []),
+                ];
+                const uniqueMemories = allMemories.filter(
+                  (memory, index, self) =>
+                    index === self.findIndex((item) => item.uri === memory.uri),
+                );
+                const leafOnly = uniqueMemories.filter((memory) => memory.level === 2);
+                const processed = postProcessMemories(leafOnly, {
+                  limit: candidateLimit,
+                  scoreThreshold: cfg.recallScoreThreshold,
+                });
+                const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+
+                if (memories.length > 0) {
+                  const memoryLines = await Promise.all(
+                    memories.map(async (item: FindResultItem) => {
+                      if (item.level === 2) {
+                        try {
+                          const content = await client.read(item.uri);
+                          if (content && typeof content === "string" && content.trim()) {
+                            return `- [${item.category ?? "memory"}] ${content.trim()}`;
+                          }
+                        } catch {
+                          // fall back
+                        }
+                      }
+                      return `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`;
+                    }),
+                  );
+                  const memoryContext = memoryLines.join("\n");
+                  api.logger.info(`openviking: injecting ${memories.length} memories into context`);
+                  api.logger.info(
+                    `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
+                  );
+                  prependContextParts.push(
+                    "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
+                      `${memoryContext}\n` +
+                      "</relevant-memories>",
+                  );
+                }
+              })(),
+              AUTO_RECALL_TIMEOUT_MS,
+              "openviking: auto-recall search timeout",
+            );
+          } catch (err) {
+            api.logger.warn?.(`openviking: auto-recall failed: ${String(err)}`);
+          }
+        }
+      }
+
+      if (cfg.ingestReplyAssist) {
+        const decision = isTranscriptLikeIngest(queryText, {
+          minSpeakerTurns: cfg.ingestReplyAssistMinSpeakerTurns,
+          minChars: cfg.ingestReplyAssistMinChars,
+        });
+        if (decision.shouldAssist) {
+          prependContextParts.push(
+            "<ingest-reply-assist>\n" +
+              "The latest user input looks like a multi-speaker transcript used for memory ingestion.\n" +
+              "Reply with 1-2 concise sentences to acknowledge or summarize key points.\n" +
+              "Do not output NO_REPLY or an empty reply.\n" +
+              "Do not fabricate facts beyond the provided transcript and recalled memories.\n" +
+              "</ingest-reply-assist>",
+          );
+        }
+      }
+
+      if (prependContextParts.length > 0) {
+        return {
+          prependContext: prependContextParts.join("\n\n"),
+        };
+      }
+    });
+
+    if (typeof api.registerContextEngine === "function") {
+      api.registerContextEngine(contextEnginePlugin.id, () =>
+        createMemoryOpenVikingContextEngine({
+          id: contextEnginePlugin.id,
+          name: contextEnginePlugin.name,
+          version: "0.1.0",
+          cfg,
+          logger: api.logger,
+          getClient,
+          resolveAgentId,
+        }),
+      );
+      api.logger.info("openviking: registered context engine");
+    }
+
+    api.registerService({
+      id: "openviking",
+      start: async () => {
+        const pendingEntry = localClientPendingPromises.get(localCacheKey);
+        const isSpawner = cfg.mode === "local" && !!pendingEntry;
+        if (isSpawner) {
+          localClientPendingPromises.delete(localCacheKey);
+          resolveLocalClient = pendingEntry!.resolve;
+          rejectLocalClient = pendingEntry!.reject;
+        }
+
+        if (isSpawner) {
+          const timeoutMs = 60_000;
+          const intervalMs = 500;
+          const actualPort = await prepareLocalPort(cfg.port, api.logger);
+          const baseUrl = `http://127.0.0.1:${actualPort}`;
+          const pythonCmd = resolvePythonCommand(api.logger);
+          const pathSep = IS_WIN ? ";" : ":";
+          const env = {
+            ...process.env,
+            PYTHONUNBUFFERED: "1",
+            PYTHONWARNINGS: "ignore::RuntimeWarning",
+            OPENVIKING_CONFIG_FILE: cfg.configPath,
+            OPENVIKING_START_CONFIG: cfg.configPath,
+            OPENVIKING_START_HOST: "127.0.0.1",
+            OPENVIKING_START_PORT: String(actualPort),
+            ...(process.env.OPENVIKING_GO_PATH
+              ? { PATH: `${process.env.OPENVIKING_GO_PATH}${pathSep}${process.env.PATH || ""}` }
+              : {}),
+            ...(process.env.OPENVIKING_GOPATH ? { GOPATH: process.env.OPENVIKING_GOPATH } : {}),
+            ...(process.env.OPENVIKING_GOPROXY ? { GOPROXY: process.env.OPENVIKING_GOPROXY } : {}),
+          };
+
+          const runpyCode =
+            "import os,runpy,importlib.util,sys,warnings;" +
+            "warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*');" +
+            "sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']];" +
+            "spec=importlib.util.find_spec('openviking.server.bootstrap');" +
+            "(runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))";
+
+          const child = spawn(pythonCmd, ["-c", runpyCode], {
+            env,
+            cwd: IS_WIN ? tmpdir() : "/tmp",
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          localProcess = child;
+          const stderrChunks: string[] = [];
+          let stderrCharCount = 0;
+          let stderrDroppedChunks = 0;
+          const pushStderrChunk = (chunk: string) => {
+            if (!chunk) return;
+            stderrChunks.push(chunk);
+            stderrCharCount += chunk.length;
+            while (
+              stderrChunks.length > MAX_OPENVIKING_STDERR_LINES ||
+              stderrCharCount > MAX_OPENVIKING_STDERR_CHARS
+            ) {
+              const dropped = stderrChunks.shift();
+              if (!dropped) break;
+              stderrCharCount -= dropped.length;
+              stderrDroppedChunks += 1;
+            }
+          };
+          const formatStderrOutput = () => {
+            if (!stderrChunks.length && !stderrDroppedChunks) {
+              return "";
+            }
+            const truncated =
+              stderrDroppedChunks > 0
+                ? `[truncated ${stderrDroppedChunks} earlier stderr chunk(s)]\n`
+                : "";
+            return `\n[openviking stderr]\n${truncated}${stderrChunks.join("\n")}`;
+          };
+
+          child.stderr?.on("data", (chunk: Buffer) => {
+            const text = String(chunk).trim();
+            pushStderrChunk(text);
+            api.logger.debug?.(`[openviking] ${text}`);
+          });
+          child.on("exit", (code, signal) => {
+            if (localProcess === child) {
+              localProcess = null;
+              localClientCache.delete(localCacheKey);
+            }
+            if ((code != null && code !== 0) || signal) {
+              api.logger.warn?.(
+                `openviking: subprocess exited (code=${code}, signal=${signal})${formatStderrOutput()}`,
+              );
+            }
+          });
+
+          try {
+            await waitForHealth(baseUrl, timeoutMs, intervalMs);
+            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+            localClientCache.set(localCacheKey, { client, process: child });
+            resolveLocalClient?.(client);
+            rejectLocalClient = null;
+            api.logger.info(`openviking: local server started (${baseUrl})`);
+          } catch (err) {
+            localProcess = null;
+            child.kill("SIGTERM");
+            rejectLocalClient?.(err);
+            rejectLocalClient = null;
+            resolveLocalClient = null;
+            throw err;
+          }
+        } else {
+          await (await getClient()).healthCheck().catch(() => {});
+          api.logger.info(`openviking: initialized (url: ${cfg.baseUrl})`);
+        }
+      },
+      stop: () => {
+        if (localProcess) {
+          localProcess.kill("SIGTERM");
+          localClientCache.delete(localCacheKey);
+          localClientPendingPromises.delete(localCacheKey);
+          localProcess = null;
+          api.logger.info("openviking: local server stopped");
+        }
+      },
+    });
+  },
+};
+
+export default contextEnginePlugin;
