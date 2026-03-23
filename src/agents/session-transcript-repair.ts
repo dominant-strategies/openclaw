@@ -438,13 +438,9 @@ type ToolUseRepairReport = {
   moved: boolean;
 };
 
-function shouldDropErroredAssistantResults(options?: ToolUseResultPairingOptions): boolean {
-  return options?.erroredAssistantResultPolicy === "drop";
-}
-
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
-  options?: ToolUseResultPairingOptions,
+  _options?: ToolUseResultPairingOptions,
 ): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
   // immediately followed by matching tool results. Session files can end up with results
