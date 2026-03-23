@@ -862,6 +862,28 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "entropic-integrations",
+    idHint: "entropic-integrations",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/entropic-integrations",
+    packageVersion: "2026.2.6-3",
+    packageDescription: "Entropic OAuth integration bridge",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "entropic-integrations",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    },
+  },
+  {
     dirName: "exa",
     idHint: "exa-plugin",
     source: {
@@ -1542,6 +1564,138 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       },
       name: "Lobster",
       description: "Typed workflow tool with resumable approvals.",
+    },
+  },
+  {
+    dirName: "lossless-claw",
+    idHint: "lossless-claw",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@martian-engineering/lossless-claw",
+    packageVersion: "0.4.0",
+    packageDescription:
+      "Lossless Context Management plugin for OpenClaw — DAG-based conversation summarization with incremental compaction",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "lossless-claw",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: {
+            type: "boolean",
+          },
+          contextThreshold: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+          },
+          incrementalMaxDepth: {
+            type: "integer",
+            minimum: -1,
+          },
+          freshTailCount: {
+            type: "integer",
+            minimum: 1,
+          },
+          leafMinFanout: {
+            type: "integer",
+            minimum: 2,
+          },
+          condensedMinFanout: {
+            type: "integer",
+            minimum: 2,
+          },
+          condensedMinFanoutHard: {
+            type: "integer",
+            minimum: 2,
+          },
+          dbPath: {
+            type: "string",
+          },
+          ignoreSessionPatterns: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
+          statelessSessionPatterns: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
+          skipStatelessSessions: {
+            type: "boolean",
+          },
+          largeFileThresholdTokens: {
+            type: "integer",
+            minimum: 1000,
+          },
+          summaryModel: {
+            type: "string",
+          },
+          summaryProvider: {
+            type: "string",
+          },
+          expansionModel: {
+            type: "string",
+          },
+          expansionProvider: {
+            type: "string",
+          },
+        },
+      },
+      uiHints: {
+        contextThreshold: {
+          label: "Context Threshold",
+          help: "Fraction of context window that triggers compaction (0.0–1.0)",
+        },
+        incrementalMaxDepth: {
+          label: "Incremental Max Depth",
+          help: "How deep incremental compaction goes (0 = leaf only, -1 = unlimited)",
+        },
+        freshTailCount: {
+          label: "Fresh Tail Count",
+          help: "Number of recent messages protected from compaction",
+        },
+        dbPath: {
+          label: "Database Path",
+          help: "Path to LCM SQLite database (default: ~/.openclaw/lcm.db)",
+        },
+        ignoreSessionPatterns: {
+          label: "Ignored Sessions",
+          help: "Glob patterns for session keys to exclude from LCM storage",
+        },
+        statelessSessionPatterns: {
+          label: "Stateless Sessions",
+          help: "Glob patterns for session keys that can read from LCM but never write to it",
+        },
+        skipStatelessSessions: {
+          label: "Skip Stateless Sessions",
+          help: "When enabled, matching stateless session keys skip LCM persistence and grant writes",
+        },
+        summaryModel: {
+          label: "Summary Model",
+          help: "Model override for LCM summarization (e.g., 'gpt-5.4' to reuse the session provider, or 'openai-resp/gpt-5.4' for a full cross-provider ref)",
+        },
+        summaryProvider: {
+          label: "Summary Provider",
+          help: "Provider override used only when summaryModel is a bare model name (e.g., 'openai-resp')",
+        },
+        expansionModel: {
+          label: "Expansion Model",
+          help: "Model override for lcm_expand_query sub-agent (e.g., 'anthropic/claude-haiku-4-5')",
+        },
+        expansionProvider: {
+          label: "Expansion Provider",
+          help: "Provider override for lcm_expand_query sub-agent (e.g., 'anthropic')",
+        },
+      },
     },
   },
   {
