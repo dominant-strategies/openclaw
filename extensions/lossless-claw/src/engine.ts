@@ -97,6 +97,48 @@ function appendTextValue(value: unknown, out: string[]): void {
   appendTextValue(record.value, out);
 }
 
+function summarizeStructuredContentForStorage(content: unknown): string {
+  if (Array.isArray(content)) {
+    if (content.length === 0) {
+      return "";
+    }
+    const typeLabels = content
+      .map((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return typeof entry;
+        }
+        const record = entry as Record<string, unknown>;
+        return typeof record.type === "string" && record.type.trim().length > 0
+          ? record.type.trim()
+          : "object";
+      })
+      .filter((label) => typeof label === "string" && label.length > 0);
+    if (typeLabels.length === 0) {
+      return `[structured content omitted: ${content.length} item${content.length === 1 ? "" : "s"}]`;
+    }
+    const preview = typeLabels.slice(0, 8).join(", ");
+    const extra = typeLabels.length > 8 ? `, +${typeLabels.length - 8} more` : "";
+    return `[structured content omitted: ${preview}${extra}]`;
+  }
+
+  if (content && typeof content === "object") {
+    const record = content as Record<string, unknown>;
+    const typeLabel =
+      typeof record.type === "string" && record.type.trim().length > 0
+        ? record.type.trim()
+        : "object";
+    const keys = Object.keys(record).filter((key) => key !== "type");
+    if (keys.length === 0) {
+      return `[structured ${typeLabel} omitted]`;
+    }
+    const preview = keys.slice(0, 8).join(", ");
+    const extra = keys.length > 8 ? `, +${keys.length - 8} more` : "";
+    return `[structured ${typeLabel} omitted: ${preview}${extra}]`;
+  }
+
+  return "";
+}
+
 const STRUCTURED_TEXT_FIELD_KEYS = ["text", "transcript", "transcription", "message", "summary"];
 const STRUCTURED_ARRAY_FIELD_KEYS = [
   "segments",
@@ -332,9 +374,7 @@ function extractMessageContent(content: unknown): string {
   ) {
     return "";
   }
-
-  const serialized = JSON.stringify(content);
-  return typeof serialized === "string" ? serialized : "";
+  return summarizeStructuredContentForStorage(content);
 }
 
 function toRuntimeRoleForTokenEstimate(role: string): "user" | "assistant" | "toolResult" {
@@ -433,18 +473,14 @@ function estimateContentTokensForRole(params: {
     if (role === "user" && content.length === 1 && isTextBlock(content[0])) {
       return estimateTokens(content[0].text);
     }
-
-    const serialized = JSON.stringify(content);
-    return estimateTokens(typeof serialized === "string" ? serialized : "");
+    return estimateTokens(summarizeStructuredContentForStorage(content));
   }
 
   if (content && typeof content === "object") {
     if (role === "user" && isTextBlock(content)) {
       return estimateTokens(content.text);
     }
-
-    const serialized = JSON.stringify([content]);
-    return estimateTokens(typeof serialized === "string" ? serialized : "");
+    return estimateTokens(summarizeStructuredContentForStorage(content));
   }
 
   return estimateTokens(fallbackContent);
@@ -775,13 +811,12 @@ function parseBootstrapJsonl(
   return { messages, sawNonWhitespace, hadMalformedLine };
 }
 
-/** Load recoverable messages from a JSON/JSONL session file without full-file reads for JSONL. */
-async function readLeafPathMessages(sessionFile: string): Promise<AgentMessage[]> {
+/** Stream recoverable messages from a JSON/JSONL session file. */
+async function* iterateLeafPathMessages(sessionFile: string): AsyncGenerator<AgentMessage> {
   try {
     let sawNonWhitespace = false;
     let jsonArrayMode = false;
     let jsonArrayBuffer = "";
-    const messages: AgentMessage[] = [];
     const stream = createReadStream(sessionFile, { encoding: "utf8" });
     const lines = createInterface({
       input: stream,
@@ -805,31 +840,43 @@ async function readLeafPathMessages(sessionFile: string): Promise<AgentMessage[]
       }
 
       const parsed = parseBootstrapJsonl(line);
-      if (parsed.messages.length > 0) {
-        messages.push(...parsed.messages);
+      for (const message of parsed.messages) {
+        yield message;
       }
     }
 
     if (jsonArrayMode) {
       const trimmed = jsonArrayBuffer.trim();
       if (!trimmed) {
-        return [];
+        return;
       }
       try {
         const parsed = JSON.parse(trimmed);
         if (!Array.isArray(parsed)) {
-          return [];
+          return;
         }
-        return parsed.filter(isBootstrapMessage);
+        for (const message of parsed) {
+          if (isBootstrapMessage(message)) {
+            yield message;
+          }
+        }
+        return;
       } catch {
-        return [];
+        return;
       }
     }
-
-    return messages;
   } catch {
-    return [];
+    return;
   }
+}
+
+/** Load recoverable messages from a JSON/JSONL session file without full-file reads for JSONL. */
+async function readLeafPathMessages(sessionFile: string): Promise<AgentMessage[]> {
+  const messages: AgentMessage[] = [];
+  for await (const message of iterateLeafPathMessages(sessionFile)) {
+    messages.push(message);
+  }
+  return messages;
 }
 
 function readFileSegment(sessionFile: string, offset: number): string | null {
@@ -1564,10 +1611,8 @@ export class LcmContextEngine implements ContextEngine {
       return { importedMessages: 0, hasOverlap: false };
     }
 
-    const storedHistoricalMessages = historicalMessages.map((message) => toStoredMessage(message));
-
     // Fast path: one tail comparison for the common in-sync case.
-    const latestHistorical = storedHistoricalMessages[storedHistoricalMessages.length - 1];
+    const latestHistorical = toStoredMessage(historicalMessages[historicalMessages.length - 1]!);
     const latestIdentity = messageIdentity(latestDbMessage.role, latestDbMessage.content);
     if (latestIdentity === messageIdentity(latestHistorical.role, latestHistorical.content)) {
       const dbOccurrences = await this.conversationStore.countMessagesByIdentity(
@@ -1576,7 +1621,8 @@ export class LcmContextEngine implements ContextEngine {
         latestDbMessage.content,
       );
       let historicalOccurrences = 0;
-      for (const stored of storedHistoricalMessages) {
+      for (const message of historicalMessages) {
+        const stored = toStoredMessage(message);
         if (messageIdentity(stored.role, stored.content) === latestIdentity) {
           historicalOccurrences += 1;
         }
@@ -1590,15 +1636,16 @@ export class LcmContextEngine implements ContextEngine {
     // message that already exists in LCM, then append everything after it.
     let anchorIndex = -1;
     const historicalIdentityTotals = new Map<string, number>();
-    for (const stored of storedHistoricalMessages) {
+    for (const message of historicalMessages) {
+      const stored = toStoredMessage(message);
       const identity = messageIdentity(stored.role, stored.content);
       historicalIdentityTotals.set(identity, (historicalIdentityTotals.get(identity) ?? 0) + 1);
     }
 
     const historicalIdentityCountsAfterIndex = new Map<string, number>();
     const dbIdentityCounts = new Map<string, number>();
-    for (let index = storedHistoricalMessages.length - 1; index >= 0; index--) {
-      const stored = storedHistoricalMessages[index];
+    for (let index = historicalMessages.length - 1; index >= 0; index--) {
+      const stored = toStoredMessage(historicalMessages[index]!);
       const identity = messageIdentity(stored.role, stored.content);
       const seenAfter = historicalIdentityCountsAfterIndex.get(identity) ?? 0;
       const total = historicalIdentityTotals.get(identity) ?? 0;
@@ -1640,9 +1687,9 @@ export class LcmContextEngine implements ContextEngine {
       return { importedMessages: 0, hasOverlap: true };
     }
 
-    const missingTail = historicalMessages.slice(anchorIndex + 1);
     let importedMessages = 0;
-    for (const message of missingTail) {
+    for (let index = anchorIndex + 1; index < historicalMessages.length; index += 1) {
+      const message = historicalMessages[index]!;
       const result = await this.ingestSingle({ sessionId, sessionKey: params.sessionKey, message });
       if (result.ingested) {
         importedMessages += 1;
@@ -1682,12 +1729,8 @@ export class LcmContextEngine implements ContextEngine {
         this.conversationStore.withTransaction(async () => {
           const persistBootstrapState = async (
             conversationId: number,
-            historicalMessages: AgentMessage[],
+            lastMessage: StoredMessage | null,
           ): Promise<void> => {
-            const lastMessage =
-              historicalMessages.length > 0
-                ? toStoredMessage(historicalMessages[historicalMessages.length - 1]!)
-                : null;
             await this.summaryStore.upsertConversationBootstrapState({
               conversationId,
               sessionFilePath: params.sessionFile,
@@ -1788,7 +1831,7 @@ export class LcmContextEngine implements ContextEngine {
                     : tailEntryMessage;
                 await persistBootstrapState(
                   conversationId,
-                  lastAppendedMessage ? [lastAppendedMessage] : [],
+                  lastAppendedMessage ? toStoredMessage(lastAppendedMessage) : null,
                 );
 
                 if (importedMessages > 0) {
@@ -1810,14 +1853,47 @@ export class LcmContextEngine implements ContextEngine {
             }
           }
 
-          const historicalMessages = await readLeafPathMessages(params.sessionFile);
-
           // First-time import path: no LCM rows yet, so seed directly from the
           // active leaf context snapshot.
           if (existingCount === 0) {
-            if (historicalMessages.length === 0) {
+            const nextSeq = (await this.conversationStore.getMaxSeq(conversationId)) + 1;
+            const bootstrapBatch: StoredMessage[] = [];
+            let importedMessages = 0;
+            let lastStoredMessage: StoredMessage | null = null;
+
+            const flushBootstrapBatch = async (): Promise<void> => {
+              if (bootstrapBatch.length === 0) {
+                return;
+              }
+              const bulkInput = bootstrapBatch.map((stored, index) => ({
+                conversationId,
+                seq: nextSeq + importedMessages + index,
+                role: stored.role,
+                content: stored.content,
+                tokenCount: stored.tokenCount,
+              }));
+              const inserted = await this.conversationStore.createMessagesBulk(bulkInput);
+              await this.summaryStore.appendContextMessages(
+                conversationId,
+                inserted.map((record) => record.messageId),
+              );
+              importedMessages += inserted.length;
+              bootstrapBatch.length = 0;
+            };
+
+            for await (const message of iterateLeafPathMessages(params.sessionFile)) {
+              const stored = toStoredMessage(message);
+              bootstrapBatch.push(stored);
+              lastStoredMessage = stored;
+              if (bootstrapBatch.length >= 128) {
+                await flushBootstrapBatch();
+              }
+            }
+            await flushBootstrapBatch();
+
+            if (importedMessages === 0) {
               await this.conversationStore.markConversationBootstrapped(conversationId);
-              await persistBootstrapState(conversationId, historicalMessages);
+              await persistBootstrapState(conversationId, null);
               return {
                 bootstrapped: false,
                 importedMessages: 0,
@@ -1825,25 +1901,8 @@ export class LcmContextEngine implements ContextEngine {
               };
             }
 
-            const nextSeq = (await this.conversationStore.getMaxSeq(conversationId)) + 1;
-            const bulkInput = historicalMessages.map((message, index) => {
-              const stored = toStoredMessage(message);
-              return {
-                conversationId,
-                seq: nextSeq + index,
-                role: stored.role,
-                content: stored.content,
-                tokenCount: stored.tokenCount,
-              };
-            });
-
-            const inserted = await this.conversationStore.createMessagesBulk(bulkInput);
-            await this.summaryStore.appendContextMessages(
-              conversationId,
-              inserted.map((record) => record.messageId),
-            );
             await this.conversationStore.markConversationBootstrapped(conversationId);
-            await persistBootstrapState(conversationId, historicalMessages);
+            await persistBootstrapState(conversationId, lastStoredMessage);
 
             // Prune HEARTBEAT_OK turns from the freshly imported data
             if (this.config.pruneHeartbeatOk) {
@@ -1857,9 +1916,11 @@ export class LcmContextEngine implements ContextEngine {
 
             return {
               bootstrapped: true,
-              importedMessages: inserted.length,
+              importedMessages,
             };
           }
+
+          const historicalMessages = await readLeafPathMessages(params.sessionFile);
 
           // Existing conversation path: reconcile crash gaps by appending JSONL
           // messages that were never persisted to LCM.
@@ -1875,7 +1936,12 @@ export class LcmContextEngine implements ContextEngine {
           }
 
           if (reconcile.importedMessages > 0) {
-            await persistBootstrapState(conversationId, historicalMessages);
+            await persistBootstrapState(
+              conversationId,
+              historicalMessages.length > 0
+                ? toStoredMessage(historicalMessages[historicalMessages.length - 1]!)
+                : null,
+            );
             return {
               bootstrapped: true,
               importedMessages: reconcile.importedMessages,
@@ -1884,7 +1950,12 @@ export class LcmContextEngine implements ContextEngine {
           }
 
           if (reconcile.hasOverlap) {
-            await persistBootstrapState(conversationId, historicalMessages);
+            await persistBootstrapState(
+              conversationId,
+              historicalMessages.length > 0
+                ? toStoredMessage(historicalMessages[historicalMessages.length - 1]!)
+                : null,
+            );
           }
 
           if (conversation.bootstrappedAt) {
