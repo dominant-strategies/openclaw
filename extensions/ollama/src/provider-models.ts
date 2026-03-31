@@ -121,8 +121,9 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
+/** Heuristic: treat known reasoning families as reasoning-capable local models. */
 export function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
+  return /r1|reasoning|think|reason|nemotron/i.test(modelId);
 }
 
 export function buildOllamaModelDefinition(

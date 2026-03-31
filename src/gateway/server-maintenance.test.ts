@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { ChatMessageBuffer } from "./server-chat.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
 
@@ -37,12 +38,20 @@ function createMaintenanceTimerDeps() {
     dedupe: new Map(),
     chatAbortControllers: new Map(),
     chatRunState: { abortedRuns: new Map() },
-    chatRunBuffers: new Map(),
+    chatRunBuffers: new Map<string, ChatMessageBuffer>(),
     chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
+    chatDeltaLastBroadcastSignature: new Map<string, string>(),
     removeChatRun: () => undefined,
     agentRunSeq: new Map(),
     nodeSendToSession: () => {},
+  };
+}
+
+function createBuffer(text: string): ChatMessageBuffer {
+  return {
+    text,
+    reasoningText: "",
+    toolCalls: [],
   };
 }
 
@@ -145,17 +154,17 @@ describe("startGatewayMaintenanceTimers", () => {
     const deps = createMaintenanceTimerDeps();
     const runId = "run-active";
     deps.chatAbortControllers.set(runId, createActiveRun("main"));
-    deps.chatRunBuffers.set(runId, "buffer");
+    deps.chatRunBuffers.set(runId, createBuffer("buffer"));
     deps.chatDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
-    deps.chatDeltaLastBroadcastLen.set(runId, 6);
+    deps.chatDeltaLastBroadcastSignature.set(runId, "buffer");
 
     const timers = startGatewayMaintenanceTimers(deps);
 
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(deps.chatRunBuffers.get(runId)).toBe("buffer");
+    expect(deps.chatRunBuffers.get(runId)?.text).toBe("buffer");
     expect(deps.chatDeltaSentAt.has(runId)).toBe(true);
-    expect(deps.chatDeltaLastBroadcastLen.get(runId)).toBe(6);
+    expect(deps.chatDeltaLastBroadcastSignature.get(runId)).toBe("buffer");
 
     stopMaintenanceTimers(timers);
   });
@@ -166,9 +175,9 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const runId = "run-orphaned";
-    deps.chatRunBuffers.set(runId, "buffer");
+    deps.chatRunBuffers.set(runId, createBuffer("buffer"));
     deps.chatDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
-    deps.chatDeltaLastBroadcastLen.set(runId, 6);
+    deps.chatDeltaLastBroadcastSignature.set(runId, "buffer");
 
     const timers = startGatewayMaintenanceTimers(deps);
 
@@ -176,21 +185,21 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(deps.chatRunBuffers.has(runId)).toBe(false);
     expect(deps.chatDeltaSentAt.has(runId)).toBe(false);
-    expect(deps.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
+    expect(deps.chatDeltaLastBroadcastSignature.has(runId)).toBe(false);
 
     stopMaintenanceTimers(timers);
   });
 
-  it("clears deltaLastBroadcastLen when aborted runs age out", async () => {
+  it("clears deltaLastBroadcastSignature when aborted runs age out", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const runId = "run-aborted";
     deps.chatRunState.abortedRuns.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
-    deps.chatRunBuffers.set(runId, "buffer");
+    deps.chatRunBuffers.set(runId, createBuffer("buffer"));
     deps.chatDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
-    deps.chatDeltaLastBroadcastLen.set(runId, 6);
+    deps.chatDeltaLastBroadcastSignature.set(runId, "buffer");
 
     const timers = startGatewayMaintenanceTimers(deps);
 
@@ -199,7 +208,7 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.chatRunState.abortedRuns.has(runId)).toBe(false);
     expect(deps.chatRunBuffers.has(runId)).toBe(false);
     expect(deps.chatDeltaSentAt.has(runId)).toBe(false);
-    expect(deps.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
+    expect(deps.chatDeltaLastBroadcastSignature.has(runId)).toBe(false);
 
     stopMaintenanceTimers(timers);
   });

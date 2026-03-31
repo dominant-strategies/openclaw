@@ -202,26 +202,331 @@ export function createChatRunRegistry(): ChatRunRegistry {
 
 export type ChatRunState = {
   registry: ChatRunRegistry;
-  buffers: Map<string, string>;
+  buffers: Map<string, ChatMessageBuffer>;
   deltaSentAt: Map<string, number>;
-  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
-  deltaLastBroadcastLen: Map<string, number>;
+  /** Signature of the last broadcast assistant payload, used to avoid duplicate flushes. */
+  deltaLastBroadcastSignature: Map<string, string>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
 
+type ChatToolCallBuffer = {
+  toolCallId: string;
+  name: string;
+  phase: string;
+  isError: boolean;
+  argsText?: string;
+  detailText?: string;
+};
+
+export type ChatMessageBuffer = {
+  text: string;
+  reasoningText: string;
+  toolCalls: ChatToolCallBuffer[];
+};
+
+function createEmptyChatMessageBuffer(): ChatMessageBuffer {
+  return {
+    text: "",
+    reasoningText: "",
+    toolCalls: [],
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function truncateToolPreview(text: string, maxChars = 480): string {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars - 1)}…`;
+}
+
+function readStringField(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function formatScalarPreview(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (Array.isArray(value)) {
+    const items = value
+      .map((entry) => formatScalarPreview(entry))
+      .filter((entry): entry is string => Boolean(entry))
+      .slice(0, 3);
+    return items.length > 0 ? items.join(", ") : undefined;
+  }
+  return undefined;
+}
+
+function formatToolArgsText(args: unknown): string | undefined {
+  if (!isRecord(args)) {
+    return undefined;
+  }
+  const direct =
+    readStringField(args, [
+      "url",
+      "query",
+      "q",
+      "path",
+      "file_path",
+      "filePath",
+      "command",
+      "cmd",
+    ]) ?? readStringField(args, ["prompt", "name", "target"]);
+  if (direct) {
+    return truncateToolPreview(direct, 220);
+  }
+  const entries = Object.entries(args)
+    .map(([key, value]) => {
+      const preview = formatScalarPreview(value);
+      if (!preview) {
+        return null;
+      }
+      return `${key}: ${preview}`;
+    })
+    .filter((entry): entry is string => Boolean(entry))
+    .slice(0, 3);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return truncateToolPreview(entries.join(" · "), 220);
+}
+
+function extractToolResultText(result: unknown): string | undefined {
+  if (!isRecord(result)) {
+    return undefined;
+  }
+  const content = Array.isArray(result.content) ? result.content : [];
+  const parts = content
+    .map((item) => {
+      if (!isRecord(item) || item.type !== "text" || typeof item.text !== "string") {
+        return undefined;
+      }
+      const trimmed = item.text.trim();
+      return trimmed ? trimmed : undefined;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+  if (parts.length === 0) {
+    return undefined;
+  }
+  return parts.join("\n");
+}
+
+function formatSearchResultPreview(details: Record<string, unknown>): string | undefined {
+  const rawResults = Array.isArray(details.results) ? details.results : [];
+  const query = readStringField(details, ["query", "q"]);
+  const lines = rawResults
+    .slice(0, 3)
+    .map((entry, index) => {
+      if (!isRecord(entry)) {
+        return undefined;
+      }
+      const title = readStringField(entry, ["title", "name"]);
+      const url = readStringField(entry, ["url", "link", "href"]);
+      const snippet = readStringField(entry, ["snippet", "description", "summary"]);
+      const primary = title ?? url ?? `Result ${index + 1}`;
+      const detail = url && url !== primary ? `\n${url}` : "";
+      const snippetLine = snippet ? `\n${snippet}` : "";
+      return `${index + 1}. ${primary}${detail}${snippetLine}`;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const prefix = query
+    ? `Results for ${query}`
+    : `${rawResults.length} result${rawResults.length === 1 ? "" : "s"}`;
+  return truncateToolPreview([prefix, ...lines].join("\n"));
+}
+
+function formatWebFetchPreview(details: Record<string, unknown>): string | undefined {
+  const title = readStringField(details, ["title"]);
+  const url = readStringField(details, ["finalUrl", "final_url", "url"]);
+  const extractor = readStringField(details, ["extractor"]);
+  const warning = readStringField(details, ["warning"]);
+  const statusValue = details.status;
+  const status =
+    typeof statusValue === "number" && Number.isFinite(statusValue)
+      ? `HTTP ${statusValue}`
+      : typeof statusValue === "string" && statusValue.trim()
+        ? statusValue.trim()
+        : undefined;
+  const lines = [
+    title,
+    url,
+    status,
+    extractor ? `Extractor: ${extractor}` : undefined,
+    warning,
+  ].filter((entry): entry is string => Boolean(entry));
+  if (lines.length === 0) {
+    return undefined;
+  }
+  return truncateToolPreview(lines.join("\n"));
+}
+
+function formatToolResultDetailText(toolName: string, result: unknown): string | undefined {
+  if (!isRecord(result)) {
+    return undefined;
+  }
+  const details = isRecord(result.details) ? result.details : undefined;
+  if (details) {
+    if (toolName === "web_fetch") {
+      const preview = formatWebFetchPreview(details);
+      if (preview) {
+        return preview;
+      }
+    }
+    const searchPreview = formatSearchResultPreview(details);
+    if (searchPreview) {
+      return searchPreview;
+    }
+    const genericLines = [
+      readStringField(details, ["title", "name"]),
+      readStringField(details, ["finalUrl", "final_url", "url", "path"]),
+      readStringField(details, ["message", "summary"]),
+    ].filter((entry): entry is string => Boolean(entry));
+    if (genericLines.length > 0) {
+      return truncateToolPreview(genericLines.join("\n"));
+    }
+  }
+  const text = extractToolResultText(result);
+  if (!text) {
+    return undefined;
+  }
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  if (lines.length === 0) {
+    return undefined;
+  }
+  return truncateToolPreview(lines.join("\n"));
+}
+
+function getOrCreateChatMessageBuffer(
+  buffers: Map<string, ChatMessageBuffer>,
+  clientRunId: string,
+): ChatMessageBuffer {
+  const existing = buffers.get(clientRunId);
+  if (existing) {
+    return existing;
+  }
+  const created = createEmptyChatMessageBuffer();
+  buffers.set(clientRunId, created);
+  return created;
+}
+
+function buildChatMessageContent(params: {
+  buffer: ChatMessageBuffer;
+  visibleText: string;
+}): Array<Record<string, unknown>> {
+  const content: Array<Record<string, unknown>> = [];
+  const reasoningText = params.buffer.reasoningText.trim();
+  if (reasoningText) {
+    content.push({ type: "thinking", thinking: reasoningText });
+  }
+  for (const toolCall of params.buffer.toolCalls) {
+    content.push({
+      type: "toolCall",
+      id: toolCall.toolCallId,
+      name: toolCall.name,
+      phase: toolCall.phase,
+      ...(toolCall.argsText ? { argsText: toolCall.argsText } : {}),
+      ...(toolCall.detailText ? { detailText: toolCall.detailText } : {}),
+      ...(toolCall.isError ? { isError: true } : {}),
+    });
+  }
+  if (params.visibleText) {
+    content.push({ type: "text", text: params.visibleText });
+  }
+  return content;
+}
+
+function buildChatMessageSignature(content: Array<Record<string, unknown>>): string {
+  return JSON.stringify(content);
+}
+
+function applyToolEventToBuffer(
+  buffer: ChatMessageBuffer,
+  data: Record<string, unknown>,
+  limit = 24,
+): boolean {
+  const name = typeof data.name === "string" ? data.name.trim() : "";
+  const toolCallIdRaw = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
+  const toolCallId = toolCallIdRaw || name;
+  if (!toolCallId || !name) {
+    return false;
+  }
+  const phase = typeof data.phase === "string" ? data.phase : "start";
+  const isError = data.isError === true;
+  const existingIndex = buffer.toolCalls.findIndex((entry) => entry.toolCallId === toolCallId);
+  const existing = existingIndex >= 0 ? buffer.toolCalls[existingIndex] : undefined;
+  const nextEntry: ChatToolCallBuffer = {
+    toolCallId,
+    name,
+    phase,
+    isError,
+    argsText: formatToolArgsText(data.args) ?? existing?.argsText,
+    detailText:
+      formatToolResultDetailText(
+        name,
+        phase === "update" ? data.partialResult : phase === "result" ? data.result : undefined,
+      ) ?? existing?.detailText,
+  };
+  if (existingIndex < 0) {
+    buffer.toolCalls = [...buffer.toolCalls, nextEntry].slice(-limit);
+    return true;
+  }
+  const existingEntry = buffer.toolCalls[existingIndex];
+  if (
+    existingEntry.name === nextEntry.name &&
+    existingEntry.phase === nextEntry.phase &&
+    existingEntry.isError === nextEntry.isError &&
+    existingEntry.argsText === nextEntry.argsText &&
+    existingEntry.detailText === nextEntry.detailText
+  ) {
+    return false;
+  }
+  const nextToolCalls = [...buffer.toolCalls];
+  nextToolCalls[existingIndex] = nextEntry;
+  buffer.toolCalls = nextToolCalls;
+  return true;
+}
+
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
-  const buffers = new Map<string, string>();
+  const buffers = new Map<string, ChatMessageBuffer>();
   const deltaSentAt = new Map<string, number>();
-  const deltaLastBroadcastLen = new Map<string, number>();
+  const deltaLastBroadcastSignature = new Map<string, string>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
     deltaSentAt.clear();
-    deltaLastBroadcastLen.clear();
+    deltaLastBroadcastSignature.clear();
     abortedRuns.clear();
   };
 
@@ -229,7 +534,7 @@ export function createChatRunState(): ChatRunState {
     registry,
     buffers,
     deltaSentAt,
-    deltaLastBroadcastLen,
+    deltaLastBroadcastSignature,
     abortedRuns,
     clear,
   };
@@ -539,20 +844,19 @@ export function createAgentEventHandler({
     seq: number,
     text: string,
     delta?: unknown,
+    opts?: { force?: boolean },
   ) => {
     const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
     const cleanedDelta =
       typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
-    const previousText = chatRunState.buffers.get(clientRunId) ?? "";
+    const buffer = getOrCreateChatMessageBuffer(chatRunState.buffers, clientRunId);
+    const previousText = buffer.text;
     const mergedText = resolveMergedAssistantText({
       previousText,
       nextText: cleanedText,
       nextDelta: cleanedDelta,
     });
-    if (!mergedText) {
-      return;
-    }
-    chatRunState.buffers.set(clientRunId, mergedText);
+    buffer.text = mergedText;
     if (isSilentReplyText(mergedText, SILENT_REPLY_TOKEN)) {
       return;
     }
@@ -564,11 +868,22 @@ export function createAgentEventHandler({
     }
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
-    if (now - last < 150) {
+    if (!opts?.force && now - last < 150) {
+      return;
+    }
+    const content = buildChatMessageContent({
+      buffer,
+      visibleText: mergedText.trim(),
+    });
+    if (content.length === 0) {
+      return;
+    }
+    const signature = buildChatMessageSignature(content);
+    if (!opts?.force && chatRunState.deltaLastBroadcastSignature.get(clientRunId) === signature) {
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
-    chatRunState.deltaLastBroadcastLen.set(clientRunId, mergedText.length);
+    chatRunState.deltaLastBroadcastSignature.set(clientRunId, signature);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -576,7 +891,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text: mergedText }],
+        content,
         timestamp: now,
       },
     };
@@ -585,9 +900,8 @@ export function createAgentEventHandler({
   };
 
   const resolveBufferedChatTextState = (clientRunId: string, sourceRunId: string) => {
-    const bufferedText = stripInlineDirectiveTagsForDisplay(
-      chatRunState.buffers.get(clientRunId) ?? "",
-    ).text.trim();
+    const buffer = chatRunState.buffers.get(clientRunId) ?? createEmptyChatMessageBuffer();
+    const bufferedText = stripInlineDirectiveTagsForDisplay(buffer.text).text.trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
@@ -605,14 +919,19 @@ export function createAgentEventHandler({
     sourceRunId: string,
     seq: number,
   ) => {
+    const buffer = chatRunState.buffers.get(clientRunId) ?? createEmptyChatMessageBuffer();
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
     const shouldSuppressSilentLeadFragment = isSilentReplyLeadFragment(text);
     const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
       clientRunId,
       sourceRunId,
     );
+    const content = buildChatMessageContent({
+      buffer,
+      visibleText: text,
+    });
     if (
-      !text ||
+      content.length === 0 ||
       shouldSuppressSilent ||
       shouldSuppressSilentLeadFragment ||
       shouldSuppressHeartbeatStreaming
@@ -620,8 +939,8 @@ export function createAgentEventHandler({
       return;
     }
 
-    const lastBroadcastLen = chatRunState.deltaLastBroadcastLen.get(clientRunId) ?? 0;
-    if (text.length <= lastBroadcastLen) {
+    const signature = buildChatMessageSignature(content);
+    if (chatRunState.deltaLastBroadcastSignature.get(clientRunId) === signature) {
       return;
     }
 
@@ -633,13 +952,13 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content,
         timestamp: now,
       },
     };
     broadcast("chat", flushPayload, { dropIfSlow: true });
     nodeSendToSession(sessionKey, "chat", flushPayload);
-    chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
+    chatRunState.deltaLastBroadcastSignature.set(clientRunId, signature);
     chatRunState.deltaSentAt.set(clientRunId, now);
   };
 
@@ -652,16 +971,21 @@ export function createAgentEventHandler({
     error?: unknown,
     stopReason?: string,
   ) => {
+    const buffer = chatRunState.buffers.get(clientRunId) ?? createEmptyChatMessageBuffer();
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
     // Flush any throttled delta so streaming clients receive the complete text
     // before the final event. The 150 ms throttle in emitChatDelta may have
     // suppressed the most recent chunk, leaving the client with stale text.
     // Only flush if the buffer has grown since the last broadcast to avoid duplicates.
     flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, sourceRunId, seq);
-    chatRunState.deltaLastBroadcastLen.delete(clientRunId);
+    chatRunState.deltaLastBroadcastSignature.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
+      const content = buildChatMessageContent({
+        buffer,
+        visibleText: text,
+      });
       const payload = {
         runId: clientRunId,
         sessionKey,
@@ -669,10 +993,10 @@ export function createAgentEventHandler({
         state: "final" as const,
         ...(stopReason && { stopReason }),
         message:
-          text && !shouldSuppressSilent
+          content.length > 0 && !shouldSuppressSilent
             ? {
                 role: "assistant",
-                content: [{ type: "text", text }],
+                content,
                 timestamp: Date.now(),
               }
             : undefined,
@@ -811,6 +1135,26 @@ export function createAgentEventHandler({
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
+      } else if (
+        !isAborted &&
+        (evt.stream === "thinking" || evt.stream === "reasoning") &&
+        typeof evt.data?.text === "string"
+      ) {
+        const buffer = getOrCreateChatMessageBuffer(chatRunState.buffers, clientRunId);
+        const nextReasoning = evt.data.text.trim();
+        if (nextReasoning !== buffer.reasoningText) {
+          buffer.reasoningText = nextReasoning;
+          emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, buffer.text, undefined, {
+            force: true,
+          });
+        }
+      } else if (!isAborted && isToolEvent) {
+        const buffer = getOrCreateChatMessageBuffer(chatRunState.buffers, clientRunId);
+        if (applyToolEventToBuffer(buffer, evt.data)) {
+          emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, buffer.text, undefined, {
+            force: true,
+          });
+        }
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         const evtStopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
@@ -845,6 +1189,7 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
+        chatRunState.deltaLastBroadcastSignature.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }

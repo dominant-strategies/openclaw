@@ -11,6 +11,7 @@ import type { NodeRegistry } from "../node-registry.js";
 import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
+import type { ChatMessageBuffer } from "../server-chat.js";
 import type { DedupeEntry } from "../server-shared.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -62,9 +63,9 @@ export type GatewayRequestContext = {
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatAbortedRuns: Map<string, number>;
-  chatRunBuffers: Map<string, string>;
+  chatRunBuffers: Map<string, ChatMessageBuffer>;
   chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
+  chatDeltaLastBroadcastSignature: Map<string, string>;
   addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
   removeChatRun: (
     sessionId: string,

@@ -185,9 +185,9 @@ export async function runAgentTurnWithFallback(params: {
     params.opts?.onAgentRunStart?.(runId);
   };
   const shouldSurfaceToControlUi = isInternalMessageChannel(
-    params.followupRun.run.messageProvider ??
-      params.sessionCtx.Surface ??
-      params.sessionCtx.Provider,
+    params.sessionCtx.Surface ??
+      params.sessionCtx.Provider ??
+      params.followupRun.run.messageProvider,
   );
   if (params.sessionKey) {
     registerAgentRunContext(runId, {

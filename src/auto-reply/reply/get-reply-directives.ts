@@ -394,9 +394,12 @@ export async function resolveReplyDirectives(params: {
     directives.verboseLevel ??
     (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
     (agentCfg?.verboseDefault as VerboseLevel | undefined);
+  const sessionReasoningLevel = sessionEntry?.reasoningLevel as ReasoningLevel | undefined;
   let resolvedReasoningLevel: ReasoningLevel =
     directives.reasoningLevel ??
-    (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+    (sessionReasoningLevel === "off"
+      ? "off"
+      : (opts?.reasoningLevelOverride ?? sessionReasoningLevel)) ??
     (agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
     "off";
   const resolvedElevatedLevel = elevatedAllowed
@@ -451,6 +454,7 @@ export async function resolveReplyDirectives(params: {
     agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null;
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
+    opts?.reasoningLevelOverride !== undefined ||
     (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null) ||
     hasAgentReasoningDefault;
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";

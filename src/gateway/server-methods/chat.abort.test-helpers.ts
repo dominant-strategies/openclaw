@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import type { ChatMessageBuffer } from "../server-chat.js";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
 export function createActiveRun(
@@ -23,9 +24,9 @@ export function createActiveRun(
 
 export type ChatAbortTestContext = Record<string, unknown> & {
   chatAbortControllers: Map<string, ReturnType<typeof createActiveRun>>;
-  chatRunBuffers: Map<string, string>;
+  chatRunBuffers: Map<string, ChatMessageBuffer>;
   chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
+  chatDeltaLastBroadcastSignature: Map<string, string>;
   chatAbortedRuns: Map<string, number>;
   removeChatRun: (...args: unknown[]) => { sessionKey: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
@@ -41,9 +42,9 @@ export function createChatAbortContext(
 ): ChatAbortTestContext {
   return {
     chatAbortControllers: new Map(),
-    chatRunBuffers: new Map(),
+    chatRunBuffers: new Map<string, ChatMessageBuffer>(),
     chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
+    chatDeltaLastBroadcastSignature: new Map<string, string>(),
     chatAbortedRuns: new Map<string, number>(),
     removeChatRun: vi
       .fn()

@@ -2,6 +2,7 @@ import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/t
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   enrichOllamaModelsWithContext,
+  isReasoningModelHeuristic,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./provider-models.js";
@@ -37,5 +38,10 @@ describe("ollama provider models", () => {
       { name: "llama3:8b", contextWindow: 65536 },
       { name: "deepseek-r1:14b", contextWindow: undefined },
     ]);
+  });
+
+  it("treats Nemotron models as reasoning-capable", () => {
+    expect(isReasoningModelHeuristic("nemotron-3-nano:4b")).toBe(true);
+    expect(isReasoningModelHeuristic("llama3:8b")).toBe(false);
   });
 });
