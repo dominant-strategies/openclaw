@@ -100,9 +100,9 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
-/** Heuristic: treat models with "r1", "reasoning", or "think" in the name as reasoning models. */
+/** Heuristic: treat known reasoning families as reasoning-capable local models. */
 export function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
+  return /r1|reasoning|think|reason|nemotron/i.test(modelId);
 }
 
 /** Build a ModelDefinitionConfig for an Ollama model with default values. */

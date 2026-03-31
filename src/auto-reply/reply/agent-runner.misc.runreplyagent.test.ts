@@ -5,7 +5,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
-import { onAgentEvent } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentRunContext,
+  onAgentEvent,
+  resetAgentRunContextForTest,
+} from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -93,6 +98,7 @@ beforeEach(() => {
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
   resetSystemEventsForTest();
+  resetAgentRunContextForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(
@@ -107,6 +113,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   resetSystemEventsForTest();
+  resetAgentRunContextForTest();
 });
 
 describe("runReplyAgent onAgentRunStart", () => {
@@ -214,6 +221,100 @@ describe("runReplyAgent onAgentRunStart", () => {
     expect(onAgentRunStart).toHaveBeenCalledTimes(1);
     expect(onAgentRunStart).toHaveBeenCalledWith("run-started");
     expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("keeps control UI visibility for webchat turns even when delivery route is external", async () => {
+    const seenEvents: Array<{ sessionKey?: string; stream?: string }> = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      seenEvents.push({ sessionKey: evt.sessionKey, stream: evt.stream });
+    });
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "+15551234567",
+      To: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const runId = "run-webchat-visible";
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "whatsapp",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "openai",
+        model: "gpt-4.1",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params: { runId?: string }) => {
+      emitAgentEvent({
+        runId: params.runId ?? runId,
+        stream: "assistant",
+        data: { text: "chunk" },
+      });
+      return {
+        payloads: [{ text: "ok" }],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-4.1",
+          },
+        },
+      };
+    });
+
+    try {
+      await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: "main",
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        opts: { runId },
+        typing,
+        sessionKey: "main",
+        sessionCtx,
+        defaultModel: "openai/gpt-4.1",
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(seenEvents).toContainEqual({
+      stream: "assistant",
+      sessionKey: "main",
+    });
+    expect(getAgentRunContext(runId)?.isControlUiVisible).toBe(true);
   });
 });
 

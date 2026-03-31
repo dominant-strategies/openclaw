@@ -383,9 +383,12 @@ export async function resolveReplyDirectives(params: {
     directives.verboseLevel ??
     (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
     (agentCfg?.verboseDefault as VerboseLevel | undefined);
+  const sessionReasoningLevel = sessionEntry?.reasoningLevel as ReasoningLevel | undefined;
   let resolvedReasoningLevel: ReasoningLevel =
     directives.reasoningLevel ??
-    (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+    (sessionReasoningLevel === "off"
+      ? "off"
+      : (opts?.reasoningLevelOverride ?? sessionReasoningLevel)) ??
     "off";
   const agentReasoningDefault = agentEntry?.reasoningDefault as ReasoningLevel | undefined;
   const hasAgentReasoningDefault = agentReasoningDefault !== undefined;
@@ -440,6 +443,7 @@ export async function resolveReplyDirectives(params: {
   // be emitted as visible "Reasoning:" messages.
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
+    opts?.reasoningLevelOverride !== undefined ||
     (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";
   if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {

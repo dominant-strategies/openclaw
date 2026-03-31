@@ -191,6 +191,37 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("emits chat delta for reasoning-only events before visible text arrives", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 1_100,
+    });
+    chatRunState.registry.add("run-reasoning", {
+      sessionKey: "session-reasoning",
+      clientRunId: "client-reasoning",
+    });
+
+    handler({
+      runId: "run-reasoning",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "Check intent\nChoose concise reply" },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      state?: string;
+      message?: { content?: Array<Record<string, unknown>> };
+    };
+    expect(payload.state).toBe("delta");
+    expect(payload.message?.content).toEqual([
+      { type: "thinking", thinking: "Check intent\nChoose concise reply" },
+    ]);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
   it("strips inline directives from assistant chat events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
@@ -201,7 +232,7 @@ describe("agent event handler", () => {
     const payload = chatCalls[0]?.[1] as {
       message?: { content?: Array<{ text?: string }> };
     };
-    expect(payload.message?.content?.[0]?.text).toBe("Hello  world ");
+    expect(payload.message?.content?.[0]?.text).toBe("Hello  world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
   });
@@ -419,6 +450,92 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("preserves structured reasoning and tool-call blocks in final chat payloads", () => {
+    let now = 11_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-structured", {
+      sessionKey: "session-structured",
+      clientRunId: "client-structured",
+    });
+
+    handler({
+      runId: "run-structured",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "Inspect the greeting" },
+    });
+
+    now = 11_200;
+    handler({
+      runId: "run-structured",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello!" },
+    });
+
+    now = 11_300;
+    handler({
+      runId: "run-structured",
+      seq: 3,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "start",
+        name: "web_fetch",
+        toolCallId: "tool-structured-1",
+        args: { url: "https://weather.example/austin" },
+      },
+    });
+
+    now = 11_350;
+    handler({
+      runId: "run-structured",
+      seq: 4,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "result",
+        name: "web_fetch",
+        toolCallId: "tool-structured-1",
+        result: {
+          content: [{ type: "text", text: '{"title":"Austin Weather"}' }],
+          details: {
+            title: "Austin Weather",
+            finalUrl: "https://weather.example/austin",
+            status: 200,
+          },
+        },
+      },
+    });
+
+    emitLifecycleEnd(handler, "run-structured", 5);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(5);
+    const resolvedFinalPayload = chatCalls[4]?.[1] as {
+      state?: string;
+      message?: { content?: Array<Record<string, unknown>> };
+    };
+    expect(resolvedFinalPayload.state).toBe("final");
+    expect(resolvedFinalPayload.message?.content).toEqual([
+      { type: "thinking", thinking: "Inspect the greeting" },
+      {
+        type: "toolCall",
+        id: "tool-structured-1",
+        name: "web_fetch",
+        phase: "result",
+        argsText: "https://weather.example/austin",
+        detailText: "Austin Weather\nhttps://weather.example/austin\nHTTP 200",
+      },
+      { type: "text", text: "Hello!" },
+    ]);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(5);
+    nowSpy.mockRestore();
+  });
+
   it("does not flush an extra delta when the latest text already broadcast", () => {
     let now = 11_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -578,14 +695,25 @@ describe("agent event handler", () => {
     });
 
     const chatCalls = chatBroadcastCalls(broadcast);
-    expect(chatCalls).toHaveLength(2);
+    expect(chatCalls).toHaveLength(3);
     const flushedPayload = chatCalls[1]?.[1] as {
       state?: string;
-      message?: { content?: Array<{ text?: string }> };
+      message?: { content?: Array<Record<string, unknown>> };
+    };
+    const toolPayload = chatCalls[2]?.[1] as {
+      state?: string;
+      message?: { content?: Array<Record<string, unknown>> };
     };
     expect(flushedPayload.state).toBe("delta");
-    expect(flushedPayload.message?.content?.[0]?.text).toBe("Before tool expanded");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
+    expect(flushedPayload.message?.content).toEqual([
+      { type: "text", text: "Before tool expanded" },
+    ]);
+    expect(toolPayload.state).toBe("delta");
+    expect(toolPayload.message?.content).toEqual([
+      { type: "toolCall", id: "tool-flush-1", name: "read", phase: "start" },
+      { type: "text", text: "Before tool expanded" },
+    ]);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
     const flushCallOrder = broadcast.mock.invocationCallOrder[1] ?? 0;
@@ -611,7 +739,16 @@ describe("agent event handler", () => {
       data: { phase: "start", name: "read", toolCallId: "t1" },
     });
 
-    expect(broadcast).not.toHaveBeenCalled();
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      state?: string;
+      message?: { content?: Array<Record<string, unknown>> };
+    };
+    expect(payload.state).toBe("delta");
+    expect(payload.message?.content).toEqual([
+      { type: "toolCall", id: "t1", name: "read", phase: "start" },
+    ]);
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
     resetAgentRunContextForTest();
   });

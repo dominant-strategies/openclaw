@@ -1,4 +1,5 @@
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
+import type { ChatMessageBuffer } from "./server-chat.js";
 
 export type ChatAbortControllerEntry = {
   controller: AbortController;
@@ -31,9 +32,9 @@ export function resolveChatRunExpiresAtMs(params: {
 
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunBuffers: Map<string, string>;
+  chatRunBuffers: Map<string, ChatMessageBuffer>;
   chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
+  chatDeltaLastBroadcastSignature: Map<string, string>;
   chatAbortedRuns: Map<string, number>;
   removeChatRun: (
     sessionId: string,
@@ -90,14 +91,14 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
-  const bufferedText = ops.chatRunBuffers.get(runId);
+  const bufferedText = ops.chatRunBuffers.get(runId)?.text;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
   active.controller.abort();
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);
   ops.chatDeltaSentAt.delete(runId);
-  ops.chatDeltaLastBroadcastLen.delete(runId);
+  ops.chatDeltaLastBroadcastSignature.delete(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
   ops.agentRunSeq.delete(runId);

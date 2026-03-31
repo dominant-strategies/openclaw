@@ -1,6 +1,7 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { InteractiveReply } from "../interactive/payload.js";
 import type { TypingController } from "./reply/typing.js";
+import type { ReasoningLevel } from "./thinking.js";
 
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
@@ -41,6 +42,8 @@ export type GetReplyOptions = {
   suppressTyping?: boolean;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
+  /** Optional per-run override for reasoning mode without mutating persisted session state. */
+  reasoningLevelOverride?: ReasoningLevel;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */

@@ -1,7 +1,7 @@
 import type { HealthSummary } from "../commands/health.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
-import type { ChatRunEntry } from "./server-chat.js";
+import type { ChatMessageBuffer, ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
@@ -29,9 +29,9 @@ export function startGatewayMaintenanceTimers(params: {
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: { abortedRuns: Map<string, number> };
-  chatRunBuffers: Map<string, string>;
+  chatRunBuffers: Map<string, ChatMessageBuffer>;
   chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
+  chatDeltaLastBroadcastSignature: Map<string, string>;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -112,7 +112,7 @@ export function startGatewayMaintenanceTimers(params: {
           chatAbortControllers: params.chatAbortControllers,
           chatRunBuffers: params.chatRunBuffers,
           chatDeltaSentAt: params.chatDeltaSentAt,
-          chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
+          chatDeltaLastBroadcastSignature: params.chatDeltaLastBroadcastSignature,
           chatAbortedRuns: params.chatRunState.abortedRuns,
           removeChatRun: params.removeChatRun,
           agentRunSeq: params.agentRunSeq,
@@ -131,7 +131,7 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunState.abortedRuns.delete(runId);
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
-      params.chatDeltaLastBroadcastLen.delete(runId);
+      params.chatDeltaLastBroadcastSignature.delete(runId);
     }
 
     // Sweep stale buffers for runs that were never explicitly aborted.
@@ -149,7 +149,7 @@ export function startGatewayMaintenanceTimers(params: {
       }
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
-      params.chatDeltaLastBroadcastLen.delete(runId);
+      params.chatDeltaLastBroadcastSignature.delete(runId);
     }
   }, 60_000);
 

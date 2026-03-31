@@ -3,6 +3,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
   StopReason,
+  ThinkingContent,
   TextContent,
   ToolCall,
   Tool,
@@ -13,6 +14,7 @@ import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "./ollama-defaults.js";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
+  buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
   buildUsageWithNoCost,
 } from "./stream-message-shared.js";
@@ -42,6 +44,7 @@ interface OllamaChatRequest {
   model: string;
   messages: OllamaChatMessage[];
   stream: boolean;
+  think?: boolean | "low" | "medium" | "high";
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
 }
@@ -216,6 +219,79 @@ interface OllamaChatResponse {
   eval_duration?: number;
 }
 
+function extractOllamaReasoningText(message: OllamaChatResponse["message"] | undefined): string {
+  if (!message) {
+    return "";
+  }
+  const parts: string[] = [];
+  if (typeof message.thinking === "string" && message.thinking) {
+    parts.push(message.thinking);
+  }
+  if (
+    typeof message.reasoning === "string" &&
+    message.reasoning &&
+    message.reasoning !== message.thinking
+  ) {
+    parts.push(message.reasoning);
+  }
+  return parts.join("");
+}
+
+function isOllamaGptOssModel(modelId: string): boolean {
+  return /\bgpt-oss\b/i.test(modelId);
+}
+
+function resolveOllamaThinkSetting(params: {
+  modelId: string;
+  reasoning?: unknown;
+}): boolean | "low" | "medium" | "high" | undefined {
+  const { reasoning } = params;
+  if (reasoning === undefined || reasoning === null) {
+    return undefined;
+  }
+
+  if (reasoning === false) {
+    return isOllamaGptOssModel(params.modelId) ? undefined : false;
+  }
+  if (reasoning === true) {
+    return isOllamaGptOssModel(params.modelId) ? "low" : true;
+  }
+
+  if (typeof reasoning !== "string") {
+    return undefined;
+  }
+
+  const normalized = reasoning.trim().toLowerCase();
+  if (!normalized || normalized === "off") {
+    return isOllamaGptOssModel(params.modelId) ? undefined : false;
+  }
+
+  if (isOllamaGptOssModel(params.modelId)) {
+    if (normalized === "medium") {
+      return "medium";
+    }
+    if (normalized === "high" || normalized === "xhigh") {
+      return "high";
+    }
+    return "low";
+  }
+
+  return true;
+}
+
+function resolveOllamaStopReason(params: {
+  response: OllamaChatResponse;
+  hasToolCalls: boolean;
+}): StopReason {
+  if (params.hasToolCalls) {
+    return "toolUse";
+  }
+  if (params.response.done_reason === "length") {
+    return "length";
+  }
+  return "stop";
+}
+
 // ── Message conversion ──────────────────────────────────────────────────────
 
 type InputContentPart =
@@ -339,10 +415,12 @@ export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: { api: string; provider: string; id: string },
 ): AssistantMessage {
-  const content: (TextContent | ToolCall)[] = [];
+  const content: (TextContent | ThinkingContent | ToolCall)[] = [];
+  const reasoning = extractOllamaReasoningText(response.message);
+  if (reasoning) {
+    content.push({ type: "thinking", thinking: reasoning });
+  }
 
-  // Native Ollama reasoning fields are internal model output. The reply text
-  // must come from `content`; reasoning visibility is controlled elsewhere.
   const text = response.message.content || "";
   if (text) {
     content.push({ type: "text", text });
@@ -361,7 +439,10 @@ export function buildAssistantMessage(
   }
 
   const hasToolCalls = toolCalls && toolCalls.length > 0;
-  const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
+  const stopReason = resolveOllamaStopReason({
+    response,
+    hasToolCalls: Boolean(hasToolCalls),
+  });
 
   return buildStreamAssistantMessage({
     model: modelInfo,
@@ -458,11 +539,16 @@ export function createOllamaStreamFn(
         if (typeof options?.maxTokens === "number") {
           ollamaOptions.num_predict = options.maxTokens;
         }
+        const think = resolveOllamaThinkSetting({
+          modelId: model.id,
+          reasoning: options?.reasoning,
+        });
 
         const body: OllamaChatRequest = {
           model: model.id,
           messages: ollamaMessages,
           stream: true,
+          ...(think !== undefined ? { think } : {}),
           ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
           options: ollamaOptions,
         };
@@ -496,19 +582,92 @@ export function createOllamaStreamFn(
         }
 
         const reader = response.body.getReader();
-        let accumulatedContent = "";
-        const accumulatedToolCalls: OllamaToolCall[] = [];
+        const output = buildAssistantMessageWithZeroUsage({
+          model: {
+            api: model.api,
+            provider: model.provider,
+            id: model.id,
+          },
+          content: [],
+          stopReason: "stop",
+        });
+        stream.push({
+          type: "start",
+          partial: output,
+        });
+
+        let textBlock: TextContent | undefined;
+        let textIndex = -1;
+        let thinkingBlock: ThinkingContent | undefined;
+        let thinkingIndex = -1;
+        const streamedToolCalls: ToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
-            accumulatedContent += chunk.message.content;
+            if (!textBlock) {
+              textBlock = { type: "text", text: "" };
+              output.content.push(textBlock);
+              textIndex = output.content.length - 1;
+              stream.push({
+                type: "text_start",
+                contentIndex: textIndex,
+                partial: output,
+              });
+            }
+            textBlock.text += chunk.message.content;
+            stream.push({
+              type: "text_delta",
+              contentIndex: textIndex,
+              delta: chunk.message.content,
+              partial: output,
+            });
           }
 
-          // Ollama sends tool_calls in intermediate (done:false) chunks,
-          // NOT in the final done:true chunk. Collect from all chunks.
+          const reasoningDelta = extractOllamaReasoningText(chunk.message);
+          if (reasoningDelta) {
+            if (!thinkingBlock) {
+              thinkingBlock = { type: "thinking", thinking: "" };
+              output.content.push(thinkingBlock);
+              thinkingIndex = output.content.length - 1;
+              stream.push({
+                type: "thinking_start",
+                contentIndex: thinkingIndex,
+                partial: output,
+              });
+            }
+            thinkingBlock.thinking += reasoningDelta;
+            stream.push({
+              type: "thinking_delta",
+              contentIndex: thinkingIndex,
+              delta: reasoningDelta,
+              partial: output,
+            });
+          }
+
           if (chunk.message?.tool_calls) {
-            accumulatedToolCalls.push(...chunk.message.tool_calls);
+            for (const toolCall of chunk.message.tool_calls) {
+              const streamedToolCall: ToolCall = {
+                type: "toolCall",
+                id: `ollama_call_${randomUUID()}`,
+                name: toolCall.function.name,
+                arguments: toolCall.function.arguments,
+              };
+              streamedToolCalls.push(streamedToolCall);
+              output.content.push(streamedToolCall);
+              const toolIndex = output.content.length - 1;
+              stream.push({
+                type: "toolcall_start",
+                contentIndex: toolIndex,
+                partial: output,
+              });
+              stream.push({
+                type: "toolcall_end",
+                contentIndex: toolIndex,
+                toolCall: streamedToolCall,
+                partial: output,
+              });
+            }
           }
 
           if (chunk.done) {
@@ -521,24 +680,41 @@ export function createOllamaStreamFn(
           throw new Error("Ollama API stream ended without a final response");
         }
 
-        finalResponse.message.content = accumulatedContent;
-        if (accumulatedToolCalls.length > 0) {
-          finalResponse.message.tool_calls = accumulatedToolCalls;
+        if (thinkingBlock) {
+          stream.push({
+            type: "thinking_end",
+            contentIndex: thinkingIndex,
+            content: thinkingBlock.thinking,
+            partial: output,
+          });
+        }
+        if (textBlock) {
+          stream.push({
+            type: "text_end",
+            contentIndex: textIndex,
+            content: textBlock.text,
+            partial: output,
+          });
         }
 
-        const assistantMessage = buildAssistantMessage(finalResponse, {
-          api: model.api,
-          provider: model.provider,
-          id: model.id,
+        const hasToolCalls = streamedToolCalls.length > 0;
+        const stopReason = resolveOllamaStopReason({
+          response: finalResponse,
+          hasToolCalls,
+        });
+        output.stopReason = stopReason;
+        output.usage = buildUsageWithNoCost({
+          input: finalResponse.prompt_eval_count ?? 0,
+          output: finalResponse.eval_count ?? 0,
         });
 
         const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
-          assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop";
+          stopReason === "toolUse" || stopReason === "length" ? stopReason : "stop";
 
         stream.push({
           type: "done",
           reason,
-          message: assistantMessage,
+          message: output,
         });
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);

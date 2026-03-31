@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { getAgentRunContext, resetAgentRunContextForTest } from "../../infra/agent-events.js";
 import {
   clearFollowupQueue,
   enqueueFollowupRun,
@@ -54,6 +55,7 @@ beforeEach(() => {
     Boolean(ch?.trim() && ROUTABLE_TEST_CHANNELS.has(ch.trim().toLowerCase())),
   );
   clearFollowupQueue("main");
+  resetAgentRunContextForTest();
 });
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
@@ -93,6 +95,54 @@ function mockCompactionRun(params: {
 function createAsyncReplySpy() {
   return vi.fn(async () => {});
 }
+
+describe("createFollowupRunner control UI visibility", () => {
+  it("keeps control UI visibility for webchat-origin followups with external delivery routes", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          provider: "openai",
+          model: "gpt-4.1",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { runId: "ignored" },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+      },
+      sessionStore: {
+        main: {
+          sessionId: "session",
+          updatedAt: Date.now(),
+        },
+      },
+      sessionKey: "main",
+      defaultModel: "openai/gpt-4.1",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "webchat",
+        run: {
+          sessionKey: "main",
+          messageProvider: "whatsapp",
+          provider: "openai",
+          model: "gpt-4.1",
+        },
+      }),
+    );
+
+    const runId = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.runId as string | undefined;
+    expect(runId).toBeTruthy();
+    expect(getAgentRunContext(runId ?? "")?.isControlUiVisible).toBe(true);
+  });
+});
 
 describe("createFollowupRunner compaction", () => {
   it("adds verbose auto-compaction notice and tracks count", async () => {

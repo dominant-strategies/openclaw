@@ -136,10 +136,7 @@ export function createFollowupRunner(params: {
     try {
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
-        resolveOriginMessageProvider({
-          originatingChannel: queued.originatingChannel,
-          provider: queued.run.messageProvider,
-        }),
+        queued.originatingChannel ?? queued.run.messageProvider,
       );
       if (queued.run.sessionKey) {
         registerAgentRunContext(runId, {

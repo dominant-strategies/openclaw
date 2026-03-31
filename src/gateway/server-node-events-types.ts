@@ -2,7 +2,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import type { ChatRunEntry } from "./server-chat.js";
+import type { ChatMessageBuffer, ChatRunEntry } from "./server-chat.js";
 import type { DedupeEntry } from "./server-shared.js";
 
 export type NodeEventContext = {
@@ -20,7 +20,7 @@ export type NodeEventContext = {
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatAbortedRuns: Map<string, number>;
-  chatRunBuffers: Map<string, string>;
+  chatRunBuffers: Map<string, ChatMessageBuffer>;
   chatDeltaSentAt: Map<string, number>;
   dedupe: Map<string, DedupeEntry>;
   agentRunSeq: Map<string, number>;
