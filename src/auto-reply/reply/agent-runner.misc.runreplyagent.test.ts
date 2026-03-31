@@ -11,19 +11,19 @@ import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import {
-  onInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../../infra/diagnostic-events.js";
+  emitAgentEvent,
+  getAgentRunContext,
+  onAgentEvent,
+  resetAgentRunContextForTest,
+} from "../../infra/agent-events.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   clearMemoryPluginState,
-  registerMemoryCapability,
-  type MemoryFlushPlanResolver,
+  registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { scheduleFollowupDrain } from "./queue.js";
-import { __testing as replyRunRegistryTesting, replyRunRegistry } from "./reply-run-registry.js";
+import { __testing as replyRunRegistryTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -37,10 +37,6 @@ function createCliBackendTestConfig() {
       },
     },
   };
-}
-
-function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
-  registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
 }
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -149,7 +145,6 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
-  resetDiagnosticEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedPiAgentMock.mockClear();
@@ -166,10 +161,11 @@ beforeEach(() => {
   clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
   refreshQueuedFollowupSessionMock.mockReset();
   refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
-  vi.mocked(scheduleFollowupDrain).mockReset();
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
+  resetSystemEventsForTest();
+  resetAgentRunContextForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(
@@ -182,11 +178,216 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetDiagnosticEventsForTest();
   vi.useRealTimers();
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
+  resetAgentRunContextForTest();
+});
+
+describe("runReplyAgent onAgentRunStart", () => {
+  function createRun(params?: {
+    provider?: string;
+    model?: string;
+    opts?: {
+      runId?: string;
+      onAgentRunStart?: (runId: string) => void;
+    };
+  }) {
+    const provider = params?.provider ?? "anthropic";
+    const model = params?.model ?? "claude";
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "webchat",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config:
+          provider === "claude-cli"
+            ? { agents: { defaults: { cliBackends: { "claude-cli": {} } } } }
+            : createCliBackendTestConfig(),
+        skillsSnapshot: {},
+        provider,
+        model,
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: params?.opts,
+      typing,
+      sessionCtx,
+      defaultModel: `${provider}/${model}`,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("does not emit start callback when fallback fails before run start", async () => {
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "anthropic".'),
+    );
+    const onAgentRunStart = vi.fn();
+
+    const result = await createRun({
+      opts: { runId: "run-no-start", onAgentRunStart },
+    });
+
+    expect(onAgentRunStart).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      text: expect.stringContaining('No API key found for provider "anthropic".'),
+    });
+  });
+
+  it("emits start callback when the CLI runner starts", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+    const onAgentRunStart = vi.fn();
+
+    const result = await createRun({
+      provider: "claude-cli",
+      model: "opus-4.5",
+      opts: { runId: "run-started", onAgentRunStart },
+    });
+
+    expect(onAgentRunStart).toHaveBeenCalledTimes(1);
+    expect(onAgentRunStart).toHaveBeenCalledWith("run-started");
+    expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("keeps control UI visibility for webchat turns even when delivery route is external", async () => {
+    const seenEvents: Array<{ sessionKey?: string; stream?: string }> = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      seenEvents.push({ sessionKey: evt.sessionKey, stream: evt.stream });
+    });
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "+15551234567",
+      To: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const runId = "run-webchat-visible";
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "whatsapp",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "openai",
+        model: "gpt-4.1",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params: { runId?: string }) => {
+      emitAgentEvent({
+        runId: params.runId ?? runId,
+        stream: "assistant",
+        data: { text: "chunk" },
+      });
+      return {
+        payloads: [{ text: "ok" }],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-4.1",
+          },
+        },
+      };
+    });
+
+    try {
+      await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: "main",
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        opts: { runId },
+        typing,
+        sessionKey: "main",
+        sessionCtx,
+        defaultModel: "openai/gpt-4.1",
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(seenEvents).toContainEqual({
+      stream: "assistant",
+      sessionKey: "main",
+    });
+    expect(getAgentRunContext(runId)?.isControlUiVisible).toBe(true);
+  });
 });
 
 describe("runReplyAgent auto-compaction token update", () => {
@@ -246,12 +447,8 @@ describe("runReplyAgent auto-compaction token update", () => {
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
 
-  async function runBaseReplyWithAgentMeta(params: {
-    agentMeta: Record<string, unknown>;
-    collectDiagnostics?: boolean;
-    tmpPrefix: string;
-  }) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tmpPrefix));
+  it("updates totalTokens from lastCallUsage even without compaction", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-last-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {
@@ -265,95 +462,23 @@ describe("runReplyAgent auto-compaction token update", () => {
     runEmbeddedPiAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {
-        agentMeta: params.agentMeta,
+        agentMeta: {
+          // Tool-use loop: accumulated input is higher than last call's input
+          usage: { input: 75_000, output: 5_000, total: 80_000 },
+          lastCallUsage: { input: 55_000, output: 2_000, total: 57_000 },
+        },
       },
     });
 
-    const diagnostics: DiagnosticEventPayload[] = [];
-    const unsubscribe = params.collectDiagnostics
-      ? onInternalDiagnosticEvent((event) => {
-          diagnostics.push(event);
-        })
-      : undefined;
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,
       sessionEntry,
     });
 
-    try {
-      await runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-        storePath,
-        defaultModel: "anthropic/claude-opus-4-6",
-        agentCfgContextTokens: 200_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
-      });
-    } finally {
-      unsubscribe?.();
-    }
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    const usageEvent = diagnostics.find((event) => event.type === "model.usage");
-    return { sessionKey, stored, usageEvent };
-  }
-
-  it("updates totalTokens from lastCallUsage even without compaction", async () => {
-    const { sessionKey, stored } = await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-usage-last-",
-      agentMeta: {
-        // Tool-use loop: accumulated input is higher than last call's input
-        usage: { input: 75_000, output: 5_000, total: 80_000 },
-        lastCallUsage: { input: 55_000, output: 2_000, total: 57_000 },
-      },
-    });
-
-    // totalTokens should use lastCallUsage (55k), not accumulated (75k)
-    expect(stored[sessionKey].totalTokens).toBe(55_000);
-  });
-
-  it("starts queued followup drain only after clearing the active reply operation", async () => {
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 50_000,
-    };
-    runEmbeddedPiAgentMock.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { agentMeta: {} },
-    });
-
-    vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
-      expect(key).toBe(sessionKey);
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-    });
-
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath: "",
-      sessionEntry,
-    });
-
-    const result = await runReplyAgent({
+    await runReplyAgent({
       commandBody: "hello",
       followupRun,
-      queueKey: sessionKey,
+      queueKey: "main",
       resolvedQueue,
       shouldSteer: false,
       shouldFollowup: false,
@@ -364,6 +489,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionEntry,
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
+      storePath,
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
@@ -374,68 +500,9 @@ describe("runReplyAgent auto-compaction token update", () => {
       typingMode: "instant",
     });
 
-    expect(result).toMatchObject({ text: "ok" });
-    expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
-    const { usageEvent } = await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-usage-diagnostic-",
-      collectDiagnostics: true,
-      agentMeta: {
-        usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
-        lastCallUsage: { input: 55_000, output: 2_000, cacheRead: 25_000, total: 82_000 },
-        promptTokens: 44_000,
-      },
-    });
-
-    expect(usageEvent).toMatchObject({
-      type: "model.usage",
-      agentId: "main",
-      usage: {
-        input: 75_000,
-        output: 5_000,
-        cacheRead: 25_000,
-        promptTokens: 100_000,
-        total: 105_000,
-      },
-      context: {
-        limit: 200_000,
-        used: 44_000,
-      },
-    });
-  });
-
-  it("falls back to last-call prompt usage for live diagnostic context", async () => {
-    const { usageEvent } = await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-usage-diagnostic-last-",
-      collectDiagnostics: true,
-      agentMeta: {
-        usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
-        lastCallUsage: {
-          input: 55_000,
-          output: 2_000,
-          cacheRead: 25_000,
-          cacheWrite: 1_000,
-          total: 83_000,
-        },
-      },
-    });
-
-    expect(usageEvent).toMatchObject({
-      type: "model.usage",
-      usage: {
-        input: 75_000,
-        output: 5_000,
-        cacheRead: 25_000,
-        promptTokens: 100_000,
-        total: 105_000,
-      },
-      context: {
-        limit: 200_000,
-        used: 81_000,
-      },
-    });
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    // totalTokens should use lastCallUsage (55k), not accumulated (75k)
+    expect(stored[sessionKey].totalTokens).toBe(55_000);
   });
 });
 
@@ -1061,7 +1128,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
           model: "claude",
           usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
           lastCallUsage: { input: 1000, output: 45, cacheRead: 750, cacheWrite: 150, total: 1945 },
-          promptTokens: 1250,
           compactionCount: 1,
         },
       },
@@ -1136,7 +1202,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("🔎 Usage (Session Total):");
     expect(traceText).toContain("🔎 Usage (Last Turn Total):");
     expect(traceText).toContain("🔎 Context Window (Last Model Request):");
-    expect(traceText).toContain("used=1,250 tok (1.3k)");
     expect(traceText).toContain("🔎 Execution Result:");
     expect(traceText).toContain("winner=anthropic/claude");
     expect(traceText).toContain("fallbackUsed=yes");
@@ -1175,7 +1240,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("🔎 Model Input (User Role):");
     expect(traceText).toContain("🔎 Model Output (Assistant Role):");
     expect(traceText).toContain(
-      "Summary: winner=claude 🧠 low fallback=yes attempts=2 stop=end_turn prompt=1.3k/200k ⬇️ 1.2k ⬆️ 45 ♻️ 800 🆕 200 🔢 2.2k tools=2 compactions=1",
+      "Summary: winner=claude 🧠 low fallback=yes attempts=2 stop=end_turn prompt=1.9k/200k ⬇️ 1.2k ⬆️ 45 ♻️ 800 🆕 200 🔢 2.2k tools=2 compactions=1",
     );
     expect(traceText.indexOf("🔎 Execution Result:")).toBeGreaterThan(
       traceText.indexOf("🔎 Context Window (Last Model Request):"),
@@ -1689,88 +1754,9 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ text: "ok" });
   });
-
-  it("uses the selected CLI runtime for canonical Anthropic models", async () => {
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          provider: "claude-cli",
-          model: "claude-opus-4-7",
-        },
-      },
-    });
-
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "webchat",
-      OriginatingTo: "session:1",
-      AccountId: "primary",
-      MessageSid: "msg",
-    } as unknown as TemplateContext;
-    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      agentRuntimeOverride: "claude-cli",
-    } as SessionEntry;
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "webchat",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: { agents: { defaults: { agentRuntime: { id: "claude-cli" } } } },
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
-
-    const result = await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      defaultModel: "anthropic/claude-opus-4-7",
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expect(runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "claude-cli" }),
-    );
-    expect(result).toMatchObject({ text: "ok" });
-  });
 });
 
-describe("runReplyAgent messaging tool dedupe", () => {
+describe("runReplyAgent messaging tool suppression", () => {
   function createRun(
     messageProvider = "slack",
     opts: { storePath?: string; sessionKey?: string } = {},
@@ -1834,23 +1820,10 @@ describe("runReplyAgent messaging tool dedupe", () => {
     });
   }
 
-  it("delivers distinct replies when a messaging tool sent via the same provider + target", async () => {
+  it("drops replies when a messaging tool sent via the same provider + target", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
-      meta: {},
-    });
-
-    const result = await createRun("slack");
-
-    expect(result).toMatchObject({ text: "hello world!" });
-  });
-
-  it("drops duplicate replies when a messaging tool sent the same text via the same provider + target", async () => {
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["hello world!"],
       messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
       meta: {},
     });
@@ -2210,7 +2183,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {
-    registerMemoryFlushPlanResolverForTest(() => ({
+    registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1_000,
       forceFlushTranscriptBytes: 1_000_000_000,
       reserveTokensFloor: 20_000,

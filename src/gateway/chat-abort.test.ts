@@ -5,6 +5,7 @@ import {
   type ChatAbortOps,
   type ChatAbortControllerEntry,
 } from "./chat-abort.js";
+import type { ChatMessageBuffer } from "./server-chat.js";
 
 function createActiveEntry(sessionKey: string): ChatAbortControllerEntry {
   const now = Date.now();
@@ -30,12 +31,20 @@ function createOps(params: {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const removeChatRun = vi.fn();
+  const chatBuffer: ChatMessageBuffer | undefined =
+    buffer === undefined
+      ? undefined
+      : {
+          text: buffer,
+          reasoningText: "",
+          toolCalls: [],
+        };
 
   return {
     chatAbortControllers: new Map([[runId, entry]]),
-    chatRunBuffers: new Map(buffer !== undefined ? [[runId, buffer]] : []),
+    chatRunBuffers: new Map(chatBuffer ? [[runId, chatBuffer]] : []),
     chatDeltaSentAt: new Map([[runId, Date.now()]]),
-    chatDeltaLastBroadcastLen: new Map([[runId, buffer?.length ?? 0]]),
+    chatDeltaLastBroadcastSignature: new Map([[runId, buffer ?? ""]]),
     chatAbortedRuns: new Map(),
     removeChatRun,
     agentRunSeq: new Map(),
@@ -79,7 +88,7 @@ describe("abortChatRunById", () => {
     expect(ops.chatAbortControllers.has(runId)).toBe(false);
     expect(ops.chatRunBuffers.has(runId)).toBe(false);
     expect(ops.chatDeltaSentAt.has(runId)).toBe(false);
-    expect(ops.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
+    expect(ops.chatDeltaLastBroadcastSignature.has(runId)).toBe(false);
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);

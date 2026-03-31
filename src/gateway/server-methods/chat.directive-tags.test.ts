@@ -54,6 +54,7 @@ const mockState = vi.hoisted(() => ({
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
   modelCatalog: null as ModelCatalogEntry[] | null,
+  lastReasoningLevelOverride: undefined as string | undefined,
   emittedTranscriptUpdates: [] as Array<{
     sessionFile: string;
     sessionKey?: string;
@@ -166,6 +167,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         onAgentRunStart?: (runId: string) => void;
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
+        reasoningLevelOverride?: string;
       };
     }) => {
       mockState.lastDispatchCtx = params.ctx;
@@ -174,6 +176,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       if (mockState.dispatchError) {
         throw mockState.dispatchError;
       }
+      mockState.lastReasoningLevelOverride = params.replyOptions?.reasoningLevelOverride;
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
       }
@@ -377,7 +380,7 @@ function createChatContext(): Pick<
   | "chatAbortControllers"
   | "chatRunBuffers"
   | "chatDeltaSentAt"
-  | "chatDeltaLastBroadcastLen"
+  | "chatDeltaLastBroadcastSignature"
   | "chatAbortedRuns"
   | "addChatRun"
   | "removeChatRun"
@@ -393,7 +396,7 @@ function createChatContext(): Pick<
     chatAbortControllers: new Map(),
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
+    chatDeltaLastBroadcastSignature: new Map(),
     chatAbortedRuns: new Map(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -494,6 +497,52 @@ async function runNonStreamingChatSend(params: {
   return chatCall?.[1];
 }
 
+describe("chat.send reasoning overrides", () => {
+  afterEach(() => {
+    mockState.lastReasoningLevelOverride = undefined;
+  });
+
+  it("threads per-run reasoning overrides into dispatch without mutating session state", async () => {
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-reasoning-stream",
+      requestParams: {
+        reasoning: "stream",
+      },
+    });
+
+    expect(mockState.lastReasoningLevelOverride).toBe("stream");
+  });
+
+  it("rejects invalid reasoning overrides", async () => {
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-invalid-reasoning",
+        reasoning: "loud",
+      },
+      respond: respond as unknown as Parameters<(typeof chatHandlers)["chat.send"]>[0]["respond"],
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    const error = respond.mock.calls[0]?.[2] as { message?: string } | undefined;
+    expect(error?.message).toContain('invalid reasoning (use "on"|"off"|"stream")');
+  });
+});
+
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
     mockState.config = {};
@@ -509,6 +558,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
     mockState.modelCatalog = null;
+    mockState.lastReasoningLevelOverride = undefined;
     mockState.emittedTranscriptUpdates = [];
     mockState.savedMediaResults = [];
     mockState.saveMediaError = null;

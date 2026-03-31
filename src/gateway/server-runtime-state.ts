@@ -24,6 +24,7 @@ import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-b
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   type ChatRunEntry,
+  type ChatMessageBuffer,
   createChatRunState,
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
@@ -98,9 +99,9 @@ export async function createGatewayRuntimeState(params: {
   agentRunSeq: Map<string, number>;
   dedupe: Map<string, DedupeEntry>;
   chatRunState: ReturnType<typeof createChatRunState>;
-  chatRunBuffers: Map<string, string>;
+  chatRunBuffers: Map<string, ChatMessageBuffer>;
   chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
+  chatDeltaLastBroadcastSignature: Map<string, string>;
   addChatRun: (sessionId: string, entry: ChatRunEntry) => void;
   removeChatRun: (
     sessionId: string,
@@ -299,7 +300,7 @@ export async function createGatewayRuntimeState(params: {
     const chatRunRegistry = chatRunState.registry;
     const chatRunBuffers = chatRunState.buffers;
     const chatDeltaSentAt = chatRunState.deltaSentAt;
-    const chatDeltaLastBroadcastLen = chatRunState.deltaLastBroadcastLen;
+    const chatDeltaLastBroadcastSignature = chatRunState.deltaLastBroadcastSignature;
     const addChatRun = chatRunRegistry.add;
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
@@ -333,7 +334,7 @@ export async function createGatewayRuntimeState(params: {
       chatRunState,
       chatRunBuffers,
       chatDeltaSentAt,
-      chatDeltaLastBroadcastLen,
+      chatDeltaLastBroadcastSignature,
       addChatRun,
       removeChatRun,
       chatAbortControllers,

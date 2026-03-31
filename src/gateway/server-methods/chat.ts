@@ -14,6 +14,8 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
+import { normalizeReasoningLevel } from "../../auto-reply/thinking.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
@@ -95,6 +97,7 @@ import {
   validateChatSendParams,
 } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
+import type { ChatMessageBuffer } from "../server-chat.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
@@ -1425,7 +1428,7 @@ async function appendAssistantTranscriptMessage(params: {
 
 function collectSessionAbortPartials(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunBuffers: Map<string, string>;
+  chatRunBuffers: Map<string, ChatMessageBuffer>;
   runIds: ReadonlySet<string>;
   abortOrigin: AbortOrigin;
 }): AbortedPartialSnapshot[] {
@@ -1434,7 +1437,7 @@ function collectSessionAbortPartials(params: {
     if (!params.runIds.has(runId)) {
       continue;
     }
-    const text = params.chatRunBuffers.get(runId);
+    const text = params.chatRunBuffers.get(runId)?.text;
     if (!text || !text.trim()) {
       continue;
     }
@@ -1486,7 +1489,7 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
     chatDeltaSentAt: context.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
+    chatDeltaLastBroadcastSignature: context.chatDeltaLastBroadcastSignature,
     chatAbortedRuns: context.chatAbortedRuns,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
@@ -1854,7 +1857,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const partialText = context.chatRunBuffers.get(runId);
+    const partialText = context.chatRunBuffers.get(runId)?.text;
     const res = abortChatRunById(ops, {
       runId,
       sessionKey: rawSessionKey,
@@ -1897,6 +1900,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       message: string;
       thinking?: string;
+      reasoning?: string;
       deliver?: boolean;
       originatingChannel?: string;
       originatingTo?: string;
@@ -1945,6 +1949,15 @@ export const chatHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, sanitizedMessageResult.error),
+      );
+      return;
+    }
+    const reasoningLevelOverride = p.reasoning ? normalizeReasoningLevel(p.reasoning) : undefined;
+    if (p.reasoning && !reasoningLevelOverride) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, 'invalid reasoning (use "on"|"off"|"stream")'),
       );
       return;
     }
@@ -2193,6 +2206,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
+      const injectReasoningOverride = Boolean(
+        reasoningLevelOverride && trimmedMessage && !trimmedMessage.startsWith("/"),
+      );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const messageForAgent = systemProvenanceReceipt
         ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
@@ -2439,6 +2455,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           abortSignal: activeRunAbort.controller.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
           imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
+          reasoningLevelOverride: injectReasoningOverride ? reasoningLevelOverride : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             void emitUserTranscriptUpdate();

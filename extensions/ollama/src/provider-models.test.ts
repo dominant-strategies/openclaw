@@ -5,6 +5,7 @@ import {
   enrichOllamaModelsWithContext,
   parseOllamaNumCtxParameter,
   resetOllamaModelShowInfoCacheForTest,
+  isReasoningModelHeuristic,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./provider-models.js";
@@ -287,5 +288,10 @@ describe("ollama provider models", () => {
     expect(parseOllamaNumCtxParameter("temperature 0.8\nnum_ctx -1\nnum_ctx 0")).toBeUndefined();
     expect(parseOllamaNumCtxParameter('stop "<|eot_id|>"')).toBeUndefined();
     expect(parseOllamaNumCtxParameter({ num_ctx: 8192 })).toBeUndefined();
+  });
+
+  it("treats Nemotron models as reasoning-capable", () => {
+    expect(isReasoningModelHeuristic("nemotron-3-nano:4b")).toBe(true);
+    expect(isReasoningModelHeuristic("llama3:8b")).toBe(false);
   });
 });

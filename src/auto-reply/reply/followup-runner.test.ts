@@ -5,6 +5,7 @@ import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-ru
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { getAgentRunContext, resetAgentRunContextForTest } from "../../infra/agent-events.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -398,6 +399,7 @@ beforeEach(() => {
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
+  resetAgentRunContextForTest();
 });
 
 afterEach(() => {
@@ -516,7 +518,57 @@ describe("createFollowupRunner runtime config", () => {
       | undefined;
     expect(call?.config).toBe(runtimeConfig);
   });
+});
 
+describe("createFollowupRunner control UI visibility", () => {
+  it("keeps control UI visibility for webchat-origin followups with external delivery routes", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          provider: "openai",
+          model: "gpt-4.1",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { runId: "ignored" },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+      },
+      sessionStore: {
+        main: {
+          sessionId: "session",
+          updatedAt: Date.now(),
+        },
+      },
+      sessionKey: "main",
+      defaultModel: "openai/gpt-4.1",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "webchat",
+        run: {
+          sessionKey: "main",
+          messageProvider: "whatsapp",
+          provider: "openai",
+          model: "gpt-4.1",
+        },
+      }),
+    );
+
+    const runId = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.runId as string | undefined;
+    expect(runId).toBeTruthy();
+    expect(getAgentRunContext(runId ?? "")?.isControlUiVisible).toBe(true);
+  });
+});
+
+describe("createFollowupRunner runtime config", () => {
   it("resolves queued embedded followups before preflight helpers read config", async () => {
     const sourceConfig: OpenClawConfig = {
       skills: {
