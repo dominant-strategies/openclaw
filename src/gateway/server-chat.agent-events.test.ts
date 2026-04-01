@@ -585,6 +585,79 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("unwraps external-content markers in search result previews", () => {
+    let now = 12_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-search-preview", {
+      sessionKey: "session-search-preview",
+      clientRunId: "client-search-preview",
+    });
+
+    handler({
+      runId: "run-search-preview",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "start",
+        name: "web_search",
+        toolCallId: "tool-search-1",
+        args: { query: "weather in austin texas" },
+      },
+    });
+
+    now = 12_200;
+    handler({
+      runId: "run-search-preview",
+      seq: 2,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "result",
+        name: "web_search",
+        toolCallId: "tool-search-1",
+        result: {
+          details: {
+            query: "weather in austin texas",
+            results: [
+              {
+                title:
+                  '\n<<<EXTERNAL_UNTRUSTED_CONTENT id="80e6d8c68694707f">>>\nSource: Web Search\n---\nAustin, Texas 78735 Weather\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="80e6d8c68694707f">>>',
+                url: "https://weather.example/austin",
+                snippet:
+                  '\n<<<EXTERNAL_UNTRUSTED_CONTENT id="bff9b764e379c374">>>\nSource: Web Search\n---\nToday\'s and tonight\'s Austin weather forecast.\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="bff9b764e379c374">>>',
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    emitLifecycleEnd(handler, "run-search-preview", 3);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(3);
+    const resolvedFinalPayload = chatCalls[2]?.[1] as {
+      state?: string;
+      message?: { content?: Array<Record<string, unknown>> };
+    };
+    expect(resolvedFinalPayload.state).toBe("final");
+    expect(resolvedFinalPayload.message?.content).toEqual([
+      {
+        type: "toolCall",
+        id: "tool-search-1",
+        name: "web_search",
+        phase: "result",
+        argsText: "weather in austin texas",
+        detailText:
+          "Results for weather in austin texas\n1. Austin, Texas 78735 Weather\nhttps://weather.example/austin\nToday's and tonight's Austin weather forecast.",
+      },
+    ]);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
   it("cleans up agent run sequence tracking when lifecycle completes", () => {
     const { agentRunSeq, chatRunState, handler, nowSpy } = createHarness({ now: 2_500 });
     chatRunState.registry.add("run-cleanup", {

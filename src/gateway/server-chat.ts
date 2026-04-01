@@ -12,6 +12,11 @@ import {
 import { loadGatewaySessionRow, loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
+const EXTERNAL_UNTRUSTED_BLOCK_RE =
+  /<<<EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]*")?\s*>>>\s*([\s\S]*?)\s*<<<END_EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]*")?\s*>>>/gi;
+const EXTERNAL_UNTRUSTED_MARKER_RE =
+  /<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]*")?\s*>>>/gi;
+
 function resolveHeartbeatAckMaxChars(): number {
   try {
     const cfg = loadConfig();
@@ -248,11 +253,136 @@ function truncateToolPreview(text: string, maxChars = 480): string {
   return `${normalized.slice(0, maxChars - 1)}…`;
 }
 
+function unwrapExternalUntrustedText(raw: string): string {
+  if (!raw) {
+    return "";
+  }
+  const isSafetyNoticeLine = (line: string): boolean => {
+    const lowered = line.trim().toLowerCase();
+    if (!lowered) {
+      return false;
+    }
+    if (lowered.startsWith("security notice:")) {
+      return true;
+    }
+    if (lowered.startsWith("source:")) {
+      return true;
+    }
+    if (lowered === "---") {
+      return true;
+    }
+    return (
+      lowered.startsWith("- do not ") ||
+      lowered.startsWith("- this content may contain ") ||
+      lowered.startsWith("- respond helpfully ") ||
+      lowered.startsWith("- delete data,") ||
+      lowered.startsWith("- execute system commands") ||
+      lowered.startsWith("- change your behavior") ||
+      lowered.startsWith("- reveal sensitive information") ||
+      lowered.startsWith("- send messages to third parties")
+    );
+  };
+  const stripSafetyPreamble = (value: string): string => {
+    const trimmed = value.trimStart();
+    if (!trimmed.toLowerCase().startsWith("security notice:")) {
+      return value;
+    }
+    const lines = value.split(/\r?\n/);
+    let index = 1;
+    while (index < lines.length) {
+      const line = lines[index]?.trim() ?? "";
+      if (!line) {
+        index += 1;
+        continue;
+      }
+      if (line.startsWith("<<<EXTERNAL_UNTRUSTED_CONTENT")) {
+        return lines.slice(index).join("\n");
+      }
+      if (isSafetyNoticeLine(line)) {
+        index += 1;
+        continue;
+      }
+      return lines.slice(index).join("\n");
+    }
+    return "";
+  };
+  let text = stripSafetyPreamble(raw);
+  text = text.replace(EXTERNAL_UNTRUSTED_BLOCK_RE, (_match, inner: string) =>
+    inner
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !isSafetyNoticeLine(line))
+      .join("\n"),
+  );
+  text = text.replace(EXTERNAL_UNTRUSTED_MARKER_RE, "");
+  text = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !isSafetyNoticeLine(line))
+    .join("\n");
+  return text.trim();
+}
+
+function extractWebFetchSnippet(
+  details: Record<string, unknown>,
+  title?: string,
+): string | undefined {
+  const rawText = typeof details.text === "string" ? details.text : "";
+  if (!rawText.trim()) {
+    return undefined;
+  }
+  const normalizeCompare = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const titleCompare = title ? normalizeCompare(title) : "";
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((rawLine) => {
+      const cleaned = unwrapExternalUntrustedText(rawLine)
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+        .replace(/^\s*[-*#]+\s*/, "")
+        .replace(/(?<=[a-z])(?=[A-Z])/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      return { rawLine, cleaned };
+    })
+    .filter(({ cleaned }) => Boolean(cleaned))
+    .filter(({ rawLine, cleaned }) => {
+      if (cleaned.toLowerCase() === "advertisement") {
+        return false;
+      }
+      if (cleaned.toLowerCase().startsWith("search for a location")) {
+        return false;
+      }
+      if (rawLine.trimStart().startsWith("#")) {
+        const words = cleaned.split(/\s+/).filter(Boolean);
+        if (words.length <= 4 && !/\d/.test(cleaned)) {
+          return false;
+        }
+      }
+      if ((rawLine.match(/\]\(/g) ?? []).length >= 2) {
+        return false;
+      }
+      if (titleCompare && normalizeCompare(cleaned).startsWith(titleCompare)) {
+        return false;
+      }
+      return true;
+    })
+    .map(({ cleaned }) => cleaned);
+  if (lines.length === 0) {
+    return undefined;
+  }
+  return truncateToolPreview(lines.slice(0, 3).join("\n"), 320);
+}
+
 function readStringField(record: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) {
-      return value.trim();
+      const normalized = unwrapExternalUntrustedText(value);
+      return normalized || value.trim();
     }
   }
   return undefined;
@@ -260,7 +390,7 @@ function readStringField(record: Record<string, unknown>, keys: string[]): strin
 
 function formatScalarPreview(value: unknown): string | undefined {
   if (typeof value === "string") {
-    const trimmed = value.trim();
+    const trimmed = unwrapExternalUntrustedText(value).trim();
     return trimmed ? trimmed : undefined;
   }
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -363,6 +493,7 @@ function formatSearchResultPreview(details: Record<string, unknown>): string | u
 function formatWebFetchPreview(details: Record<string, unknown>): string | undefined {
   const title = readStringField(details, ["title"]);
   const url = readStringField(details, ["finalUrl", "final_url", "url"]);
+  const snippet = extractWebFetchSnippet(details, title);
   const extractor = readStringField(details, ["extractor"]);
   const warning = readStringField(details, ["warning"]);
   const statusValue = details.status;
@@ -374,6 +505,7 @@ function formatWebFetchPreview(details: Record<string, unknown>): string | undef
         : undefined;
   const lines = [
     title,
+    snippet,
     url,
     status,
     extractor ? `Extractor: ${extractor}` : undefined,
