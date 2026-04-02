@@ -51,6 +51,17 @@ export type FallbackIndicatorStatus = {
   occurredAt: number;
 };
 
+export type RunSelectionIndicatorStatus = {
+  provider: string;
+  model: string;
+  source: "default" | "session" | "transient";
+  pin: boolean;
+  sessionDefaultProvider: string;
+  sessionDefaultModel: string;
+  activeProvider?: string;
+  activeModel?: string;
+};
+
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -67,6 +78,7 @@ export type ChatProps = {
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
   streamStartedAt: number | null;
+  runSelection?: RunSelectionIndicatorStatus | null;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -251,6 +263,50 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
   return html`
     <div class=${className} role="status" aria-live="polite" title=${details}>
       ${icon} ${message}
+    </div>
+  `;
+}
+
+function formatSelectionLabel(provider: string, model: string) {
+  return `${provider}/${model}`;
+}
+
+function renderRunSelectionIndicator(status: RunSelectionIndicatorStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  const selectedLabel = formatSelectionLabel(status.provider, status.model);
+  const sessionDefaultLabel = formatSelectionLabel(
+    status.sessionDefaultProvider,
+    status.sessionDefaultModel,
+  );
+  const activeLabel =
+    status.activeProvider && status.activeModel
+      ? formatSelectionLabel(status.activeProvider, status.activeModel)
+      : null;
+  const sourceLabel =
+    status.source === "transient"
+      ? status.pin
+        ? "This run pinned"
+        : "This run only"
+      : status.source === "session"
+        ? "Session default"
+        : "Gateway default";
+  const details = [
+    `${sourceLabel}: ${selectedLabel}`,
+    status.source === "transient" ? `Session default: ${sessionDefaultLabel}` : null,
+    activeLabel && activeLabel !== selectedLabel ? `Active runtime: ${activeLabel}` : null,
+  ]
+    .filter(Boolean)
+    .join(" • ");
+  return html`
+    <div
+      class="compaction-indicator compaction-indicator--model-selection"
+      role="status"
+      aria-live="polite"
+      title=${details}
+    >
+      ${icons.brain} ${sourceLabel}: ${activeLabel ?? selectedLabel}
     </div>
   `;
 }
@@ -1237,6 +1293,7 @@ export function renderChat(props: ChatProps) {
             </div>
           `
         : nothing}
+      ${renderRunSelectionIndicator(props.runSelection)}
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
       ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}

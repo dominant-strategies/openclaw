@@ -54,6 +54,32 @@ function isRunAlreadyQueued(
   return items.some((item) => item.prompt === run.prompt && hasSameRouting(item));
 }
 
+function materializeQueuedFollowupRun(run: FollowupRun): FollowupRun {
+  const queuedProvider = run.run.queuedProvider?.trim() || run.run.provider;
+  const queuedModel = run.run.queuedModel?.trim() || run.run.model;
+  const hasQueuedAuthProfileId = Object.hasOwn(run.run, "queuedAuthProfileId");
+  const nextAuthProfileId = hasQueuedAuthProfileId
+    ? run.run.queuedAuthProfileId?.trim() || undefined
+    : run.run.authProfileId;
+  const hasQueuedAuthProfileIdSource = Object.hasOwn(run.run, "queuedAuthProfileIdSource");
+  const nextAuthProfileIdSource = nextAuthProfileId
+    ? hasQueuedAuthProfileIdSource
+      ? run.run.queuedAuthProfileIdSource
+      : run.run.authProfileIdSource
+    : undefined;
+
+  return {
+    ...run,
+    run: {
+      ...run.run,
+      provider: queuedProvider,
+      model: queuedModel,
+      authProfileId: nextAuthProfileId,
+      authProfileIdSource: nextAuthProfileIdSource,
+    },
+  };
+}
+
 export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
@@ -63,6 +89,7 @@ export function enqueueFollowupRun(
   restartIfIdle = true,
 ): boolean {
   const queue = getFollowupQueue(key, settings);
+  const queuedRun = materializeQueuedFollowupRun(run);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
   if (recentMessageIdKey && RECENT_QUEUE_MESSAGE_IDS.peek(recentMessageIdKey)) {
     return false;
@@ -75,12 +102,12 @@ export function enqueueFollowupRun(
           isRunAlreadyQueued(item, items, dedupeMode === "prompt");
 
   // Deduplicate: skip if the same message is already queued.
-  if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
+  if (shouldSkipQueueItem({ item: queuedRun, items: queue.items, dedupe })) {
     return false;
   }
 
   queue.lastEnqueuedAt = Date.now();
-  queue.lastRun = run.run;
+  queue.lastRun = queuedRun.run;
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
@@ -90,7 +117,7 @@ export function enqueueFollowupRun(
     return false;
   }
 
-  queue.items.push(run);
+  queue.items.push(queuedRun);
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }

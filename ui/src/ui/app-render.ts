@@ -1414,6 +1414,7 @@ export function renderApp(state: AppViewState) {
                 state.chatStream = null;
                 state.chatStreamStartedAt = null;
                 state.chatRunId = null;
+                state.chatSelection = null;
                 state.chatQueue = [];
                 state.resetToolStream();
                 state.resetChatScroll();
@@ -1439,6 +1440,7 @@ export function renderApp(state: AppViewState) {
               streamSegments: state.chatStreamSegments,
               stream: state.chatStream,
               streamStartedAt: state.chatStreamStartedAt,
+              runSelection: state.chatSelection,
               draft: state.chatMessage,
               queue: state.chatQueue,
               connected: state.connected,

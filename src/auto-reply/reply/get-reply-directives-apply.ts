@@ -3,7 +3,7 @@ import type { SessionEntry, SessionScope } from "../../config/sessions/types.js"
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
-import type { ReplyPayload } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
 import { isDirectiveOnly, type InlineDirectives } from "./directive-handling.parse.js";
@@ -98,6 +98,7 @@ export async function applyInlineDirectiveOverrides(params: {
   contextTokens: number;
   effectiveModelDirective?: string;
   typing: TypingController;
+  transientModelOverride?: GetReplyOptions["transientModelOverride"];
 }): Promise<ApplyDirectiveResult> {
   const {
     ctx,
@@ -258,6 +259,7 @@ export async function applyInlineDirectiveOverrides(params: {
         isGroup,
         defaultGroupActivation: defaultActivation,
         mediaDecisions: ctx.MediaUnderstandingDecisions,
+        transientModelOverride: params.transientModelOverride,
       });
     }
     typing.cleanup();

@@ -201,6 +201,45 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("includes selection metadata on chat delta events when available", () => {
+    const harness = createHarness({ now: 1_000 });
+    harness.chatRunState.registry.add("run-selection", {
+      sessionKey: "session-selection",
+      clientRunId: "client-selection",
+      selection: {
+        provider: "openai",
+        model: "gpt-5.4",
+        source: "transient",
+        pin: true,
+        sessionDefaultProvider: "anthropic",
+        sessionDefaultModel: "claude-opus-4-6",
+        activeProvider: "openai",
+        activeModel: "gpt-5.4",
+      },
+    });
+
+    harness.handler({
+      runId: "run-selection",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "hello" },
+    });
+
+    const payload = chatBroadcastCalls(harness.broadcast)[0]?.[1] as
+      | {
+          selection?: { provider?: string; model?: string; source?: string; pin?: boolean };
+        }
+      | undefined;
+    expect(payload?.selection).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+      source: "transient",
+      pin: true,
+    });
+    harness.nowSpy?.mockRestore();
+  });
+
   it("emits chat delta for reasoning-only events before visible text arrives", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 1_100,

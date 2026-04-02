@@ -45,7 +45,19 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatSelection: ChatSelectionMetadata | null;
   lastError: string | null;
+};
+
+export type ChatSelectionMetadata = {
+  provider: string;
+  model: string;
+  source: "default" | "session" | "transient";
+  pin: boolean;
+  sessionDefaultProvider: string;
+  sessionDefaultModel: string;
+  activeProvider?: string;
+  activeModel?: string;
 };
 
 export type ChatEventPayload = {
@@ -54,6 +66,13 @@ export type ChatEventPayload = {
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
+  selection?: ChatSelectionMetadata;
+};
+
+export type ChatSendResponse = {
+  runId: string;
+  status?: "started" | "in_flight" | "ok" | "error";
+  selection?: ChatSelectionMetadata;
 };
 
 function maybeResetToolStream(state: ChatState) {
@@ -90,10 +109,12 @@ export async function loadChatHistory(state: ChatState) {
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    state.chatSelection = null;
   } catch (err) {
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
+      state.chatSelection = null;
       state.lastError = formatMissingOperatorReadScopeMessage("existing chat history");
     } else {
       state.lastError = String(err);
@@ -225,13 +246,14 @@ export async function sendChatMessage(
     : undefined;
 
   try {
-    await state.client.request("chat.send", {
+    const response = await state.client.request<ChatSendResponse>("chat.send", {
       sessionKey: state.sessionKey,
       message: msg,
       deliver: false,
       idempotencyKey: runId,
       attachments: apiAttachments,
     });
+    state.chatSelection = response.selection ?? state.chatSelection;
     return runId;
   } catch (err) {
     const error = formatConnectError(err);
@@ -276,6 +298,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
   if (payload.sessionKey !== state.sessionKey) {
     return null;
+  }
+  if (payload.selection) {
+    state.chatSelection = payload.selection;
   }
 
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.

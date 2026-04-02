@@ -47,6 +47,12 @@ export type GetReplyOptions = {
   heartbeatModelOverride?: string;
   /** Optional per-run override for reasoning mode without mutating persisted session state. */
   reasoningLevelOverride?: ReasoningLevel;
+  /** Optional per-run model override without mutating persisted session state. */
+  transientModelOverride?: {
+    provider?: string;
+    model: string;
+    pin?: boolean;
+  };
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */

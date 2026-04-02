@@ -359,6 +359,7 @@ export async function handleInlineActions(params: {
       isGroup,
       defaultGroupActivation: defaultActivation,
       mediaDecisions: ctx.MediaUnderstandingDecisions,
+      transientModelOverride: params.opts?.transientModelOverride,
     });
     await sendInlineReply(inlineStatusReply);
     didSendInlineStatus = true;

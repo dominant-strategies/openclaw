@@ -5,6 +5,7 @@ import {
   handleChatEvent,
   loadChatHistory,
   sendChatMessage,
+  type ChatSelectionMetadata,
   type ChatEventPayload,
   type ChatState,
 } from "./chat.ts";
@@ -16,6 +17,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatMessage: "",
     chatMessages: [],
     chatRunId: null,
+    chatSelection: null,
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
@@ -35,6 +37,18 @@ function createActiveStreamingState() {
     chatStream: "Working...",
     chatStreamStartedAt: 123,
   });
+}
+
+function createSelection(overrides: Partial<ChatSelectionMetadata> = {}): ChatSelectionMetadata {
+  return {
+    provider: "openai",
+    model: "gpt-5.4",
+    source: "transient",
+    pin: false,
+    sessionDefaultProvider: "anthropic",
+    sessionDefaultModel: "claude-opus-4-6",
+    ...overrides,
+  };
 }
 
 function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
@@ -63,6 +77,27 @@ describe("handleChatEvent", () => {
       state: "final",
     };
     expect(handleChatEvent(state, payload)).toBe(null);
+  });
+
+  it("stores selection metadata from chat events", () => {
+    const state = createState({ sessionKey: "main" });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "hello" }],
+      },
+      selection: createSelection({ pin: true }),
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatSelection).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+      pin: true,
+    });
   });
 
   it("returns null for delta from another run", () => {
@@ -533,6 +568,7 @@ describe("loadChatHistory", () => {
     expect(state.chatMessages[0]).toEqual(messages[0]);
     expect(state.chatMessages[1]).toEqual(messages[2]);
     expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatSelection).toBeNull();
     expect(state.chatLoading).toBe(false);
   });
 
@@ -579,6 +615,27 @@ describe("sendChatMessage", () => {
           text: expect.stringContaining("origin not allowed"),
         },
       ],
+    });
+  });
+
+  it("stores selection metadata from the immediate chat.send ack", async () => {
+    const request = vi.fn().mockResolvedValue({
+      runId: "run-1",
+      status: "started",
+      selection: createSelection({ pin: true }),
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "hello");
+
+    expect(result).toEqual(expect.any(String));
+    expect(state.chatSelection).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+      pin: true,
     });
   });
 });
@@ -653,12 +710,14 @@ describe("loadChatHistory", () => {
       client: { request } as unknown as ChatState["client"],
       chatMessages: [{ role: "assistant", content: [{ type: "text", text: "old" }] }],
       chatThinkingLevel: "high",
+      chatSelection: createSelection(),
     });
 
     await loadChatHistory(state);
 
     expect(state.chatMessages).toEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatSelection).toBeNull();
     expect(state.lastError).toContain("operator.read");
     expect(state.chatLoading).toBe(false);
   });

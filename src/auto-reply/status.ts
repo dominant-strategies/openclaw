@@ -83,6 +83,11 @@ type StatusArgs = {
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
   activeModelAuth?: string;
+  transientModelOverride?: {
+    provider?: string;
+    model: string;
+    pin?: boolean;
+  };
   usageLine?: string;
   timeLine?: string;
   queue?: QueueStatus;
@@ -455,15 +460,19 @@ export function buildStatusMessage(args: StatusArgs): string {
     defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: false,
   });
-  const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
-  const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
+  const currentRunProvider = resolved.provider ?? DEFAULT_PROVIDER;
+  const currentRunModel = resolved.model ?? DEFAULT_MODEL;
+  const selectedProvider = entry?.providerOverride ?? currentRunProvider;
+  const selectedModel = entry?.modelOverride ?? currentRunModel;
   const modelRefs = resolveSelectedAndActiveModel({
     selectedProvider,
     selectedModel,
     sessionEntry: entry,
   });
+  const currentRunLabel = formatProviderModelRef(currentRunProvider, currentRunModel) || "unknown";
+  const sessionDefaultLabel = modelRefs.selected.label || "unknown";
   const initialFallbackState = resolveActiveFallbackState({
-    selectedModelRef: modelRefs.selected.label || "unknown",
+    selectedModelRef: sessionDefaultLabel,
     activeModelRef: modelRefs.active.label || "unknown",
     state: entry,
   });
@@ -710,19 +719,21 @@ export function buildStatusMessage(args: StatusArgs): string {
   ];
   const activationLine = activationParts.filter(Boolean).join(" · ");
 
-  const selectedAuthMode =
-    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedProvider, args.config);
-  const selectedAuthLabelValue =
+  const currentRunAuthMode =
+    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(currentRunProvider, args.config);
+  const currentRunAuthLabelValue =
     args.modelAuth ??
-    (selectedAuthMode && selectedAuthMode !== "unknown" ? selectedAuthMode : undefined);
+    (currentRunAuthMode && currentRunAuthMode !== "unknown" ? currentRunAuthMode : undefined);
+  const selectedAuthMode = resolveModelAuthMode(selectedProvider, args.config);
+  const selectedAuthLabelValue =
+    selectedAuthMode && selectedAuthMode !== "unknown" ? selectedAuthMode : undefined;
   const activeAuthMode =
     normalizeAuthMode(args.activeModelAuth) ?? resolveModelAuthMode(activeProvider, args.config);
   const activeAuthLabelValue =
     args.activeModelAuth ??
     (activeAuthMode && activeAuthMode !== "unknown" ? activeAuthMode : undefined);
-  const selectedModelLabel = modelRefs.selected.label || "unknown";
   const fallbackState = resolveActiveFallbackState({
-    selectedModelRef: selectedModelLabel,
+    selectedModelRef: sessionDefaultLabel,
     activeModelRef: activeModelLabel,
     state: entry,
   });
@@ -751,6 +762,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       : undefined;
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
 
+  const currentRunAuthLabel = currentRunAuthLabelValue ? ` · 🔑 ${currentRunAuthLabelValue}` : "";
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const channelModelNote = (() => {
     if (!args.config || !entry) {
@@ -794,7 +806,15 @@ export function buildStatusMessage(args: StatusArgs): string {
     return "channel override";
   })();
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+  const modelLine =
+    currentRunLabel === sessionDefaultLabel
+      ? `🧠 Model: ${sessionDefaultLabel}${currentRunAuthLabel}${modelNote}`
+      : `🧠 Model: ${currentRunLabel}${currentRunAuthLabel} · session default ${sessionDefaultLabel}${selectedAuthLabel}${modelNote}`;
+  const transientSelectionLine = args.transientModelOverride?.model?.trim()
+    ? `🎯 Selection: transient override · ${
+        args.transientModelOverride.pin ? "pinned for deferred work" : "this turn only"
+      }`
+    : null;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
     ? `↪️ Fallback: ${activeModelLabel}${
@@ -815,6 +835,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     versionLine,
     args.timeLine,
     modelLine,
+    transientSelectionLine,
     fallbackLine,
     usageCostLine,
     cacheLine,

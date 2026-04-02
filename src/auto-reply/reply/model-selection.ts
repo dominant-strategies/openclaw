@@ -298,6 +298,10 @@ export async function createModelSelectionState(params: {
   defaultModel: string;
   provider: string;
   model: string;
+  transientModelOverride?: {
+    provider?: string;
+    model: string;
+  };
   hasModelDirective: boolean;
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
@@ -328,6 +332,7 @@ export async function createModelSelectionState(params: {
 
   let provider = params.provider;
   let model = params.model;
+  const hasTransientModelOverride = Boolean(params.transientModelOverride?.model?.trim());
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
   const initialStoredOverride = resolveStoredModelOverride({
@@ -415,7 +420,8 @@ export async function createModelSelectionState(params: {
   // Skip stored session model override only when an explicit heartbeat.model
   // was resolved. Heartbeat runs without heartbeat.model should still inherit
   // the regular session/parent model override behavior.
-  const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
+  const skipStoredOverride =
+    params.hasResolvedHeartbeatModelOverride === true || hasTransientModelOverride;
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeModelRef(
       storedOverride.provider || defaultProvider,

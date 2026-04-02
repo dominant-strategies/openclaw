@@ -29,6 +29,7 @@ public final class OpenClawChatViewModel {
     public var attachments: [OpenClawPendingAttachment] = []
     public private(set) var healthOK: Bool = false
     public private(set) var pendingRunCount: Int = 0
+    public private(set) var runSelection: OpenClawChatSelectionMetadata?
 
     public private(set) var sessionKey: String
     public private(set) var sessionId: String?
@@ -224,6 +225,7 @@ public final class OpenClawChatViewModel {
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
         self.sessionId = nil
+        self.runSelection = nil
         defer { self.isLoading = false }
         do {
             do {
@@ -557,6 +559,7 @@ public final class OpenClawChatViewModel {
                 thinking: thinkingLevel,
                 idempotencyKey: runId,
                 attachments: encodedAttachments)
+            self.runSelection = response.selection ?? self.runSelection
             if response.runId != runId {
                 self.clearPendingRun(runId)
                 self.pendingRuns.insert(response.runId)
@@ -958,6 +961,9 @@ public final class OpenClawChatViewModel {
     }
 
     private func handleChatEvent(_ chat: OpenClawChatEventPayload) {
+        if let selection = chat.selection {
+            self.runSelection = selection
+        }
         let isOurRun = chat.runId.flatMap { self.pendingRuns.contains($0) } ?? false
 
         // Gateway may publish canonical session keys (for example "agent:main:main")

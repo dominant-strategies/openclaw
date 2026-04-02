@@ -132,6 +132,55 @@ When a device token is issued, `hello-ok` also includes:
 
 Side-effecting methods require **idempotency keys** (see schema).
 
+## Chat RPCs
+
+### `chat.send`
+
+`chat.send` is non-blocking. The gateway acknowledges immediately, then streams the run through
+`chat` events.
+
+Core request fields:
+
+- `sessionKey` (required)
+- `message` (required)
+- `idempotencyKey` (required)
+- `thinking`, `reasoning`, `deliver`, `timeoutMs`, `attachments` (optional)
+- `provider`, `model` (optional): transient per-request model override
+- `pinModel` (optional): when `true`, deferred work spawned from that turn keeps the transient
+  override instead of falling back to the session default
+
+Model override precedence:
+
+1. `chat.send` `provider` / `model`
+2. session default (`/model` or `sessions.patch`)
+3. configured gateway default
+
+Selection metadata may appear on the immediate `chat.send` response and on `chat` events:
+
+```json
+{
+  "selection": {
+    "provider": "openai",
+    "model": "gpt-5.4",
+    "source": "transient",
+    "pin": true,
+    "sessionDefaultProvider": "anthropic",
+    "sessionDefaultModel": "claude-opus-4-6",
+    "activeProvider": "openai",
+    "activeModel": "gpt-5.4"
+  }
+}
+```
+
+`selection.source` means:
+
+- `default`: gateway-configured default model
+- `session`: session default override
+- `transient`: per-request `chat.send` override
+
+`activeProvider` / `activeModel` are present when the runtime-selected model is known and may
+reflect fallback or final runtime routing.
+
 ## Roles + scopes
 
 ### Roles

@@ -437,6 +437,7 @@ export async function resolveReplyDirectives(params: {
     defaultModel,
     provider,
     model,
+    transientModelOverride: opts?.transientModelOverride,
     hasModelDirective: directives.hasModelDirective,
     hasResolvedHeartbeatModelOverride,
   });
@@ -512,6 +513,7 @@ export async function resolveReplyDirectives(params: {
     contextTokens,
     effectiveModelDirective,
     typing,
+    transientModelOverride: opts?.transientModelOverride,
   });
   if (applyResult.kind === "reply") {
     return { kind: "reply", reply: applyResult.reply };

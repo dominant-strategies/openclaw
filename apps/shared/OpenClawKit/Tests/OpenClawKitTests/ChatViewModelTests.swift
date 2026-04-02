@@ -78,6 +78,27 @@ private func modelChoice(id: String, name: String, provider: String = "anthropic
     OpenClawChatModelChoice(modelID: id, name: name, provider: provider, contextWindow: nil)
 }
 
+private func selectionMetadata(
+    provider: String = "openai",
+    model: String = "gpt-5.4",
+    source: String = "transient",
+    pin: Bool = false,
+    sessionDefaultProvider: String = "anthropic",
+    sessionDefaultModel: String = "claude-opus-4-6",
+    activeProvider: String? = nil,
+    activeModel: String? = nil) -> OpenClawChatSelectionMetadata
+{
+    OpenClawChatSelectionMetadata(
+        provider: provider,
+        model: model,
+        source: source,
+        pin: pin,
+        sessionDefaultProvider: sessionDefaultProvider,
+        sessionDefaultModel: sessionDefaultModel,
+        activeProvider: activeProvider,
+        activeModel: activeModel)
+}
+
 private func makeViewModel(
     sessionKey: String = "main",
     historyResponses: [OpenClawChatHistoryPayload],
@@ -256,6 +277,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let compactSessionHook: (@Sendable (String) async throws -> Void)?
     private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
     private let setSessionThinkingHook: (@Sendable (String) async throws -> Void)?
+    private let sendMessageHook: (@Sendable (String, String, String, [OpenClawChatAttachmentPayload]) async throws
+        -> OpenClawChatSendResponse)?
 
     private let stream: AsyncStream<OpenClawChatTransportEvent>
     private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
@@ -267,7 +290,9 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
-        setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil)
+        setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
+        sendMessageHook: (@Sendable (String, String, String, [OpenClawChatAttachmentPayload]) async throws
+            -> OpenClawChatSendResponse)? = nil)
     {
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
@@ -276,6 +301,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.compactSessionHook = compactSessionHook
         self.setSessionModelHook = setSessionModelHook
         self.setSessionThinkingHook = setSessionThinkingHook
+        self.sendMessageHook = sendMessageHook
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
         self.stream = AsyncStream { c in
             cont = c
@@ -303,14 +329,17 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     }
 
     func sendMessage(
-        sessionKey _: String,
-        message _: String,
+        sessionKey: String,
+        message: String,
         thinking: String,
         idempotencyKey: String,
-        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
         await self.state.sentRunIdsAppend(idempotencyKey)
         await self.state.sentThinkingLevelsAppend(thinking)
+        if let sendMessageHook = self.sendMessageHook {
+            return try await sendMessageHook(sessionKey, message, thinking, attachments)
+        }
         return OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
     }
 
@@ -1682,5 +1711,60 @@ Hello?
                     errorMessage: nil)))
 
         try await waitUntil("pending run clears") { await MainActor.run { vm.pendingRunCount == 0 } }
+    }
+
+    @Test func storesRunSelectionFromSendAck() async throws {
+        let history = historyPayload(sessionId: "sess-main")
+        let (_, vm) = await makeViewModel(
+            historyResponses: [history],
+            sendMessageHook: { _, _, _, _ in
+                OpenClawChatSendResponse(
+                    runId: "run-1",
+                    status: "started",
+                    selection: selectionMetadata(pin: true))
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await sendUserMessage(vm, text: "hello")
+
+        try await waitUntil("run selection updated from send ack") {
+            await MainActor.run {
+                vm.runSelection?.provider == "openai" &&
+                    vm.runSelection?.model == "gpt-5.4" &&
+                    vm.runSelection?.pin == true
+            }
+        }
+
+    }
+
+    @Test func storesRunSelectionFromChatEvents() async throws {
+        let history = historyPayload(sessionId: "sess-main")
+        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: "other-run",
+                    sessionKey: "main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil,
+                    selection: selectionMetadata(
+                        provider: "anthropic",
+                        model: "claude-opus-4-6",
+                        source: "session",
+                        sessionDefaultProvider: "anthropic",
+                        sessionDefaultModel: "claude-opus-4-6",
+                        activeProvider: "anthropic",
+                        activeModel: "claude-opus-4-6"))))
+
+        try await waitUntil("run selection updated from chat event") {
+            await MainActor.run {
+                vm.runSelection?.provider == "anthropic" &&
+                    vm.runSelection?.model == "claude-opus-4-6" &&
+                    vm.runSelection?.source == "session"
+            }
+        }
     }
 }

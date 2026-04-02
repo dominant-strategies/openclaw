@@ -2,7 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import {
+  buildAllowedModelSet,
+  buildModelAliasIndex,
+  modelKey,
+  resolveThinkingDefault,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -333,6 +339,130 @@ function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): bool
 function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
+}
+
+function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE);
+}
+
+function resolveAllowModelOverrideFromClient(
+  client: GatewayRequestHandlerOptions["client"],
+): boolean {
+  return resolveSenderIsOwnerFromClient(client) || client?.internal?.allowModelOverride === true;
+}
+
+type ChatSelectionMetadata = {
+  provider: string;
+  model: string;
+  source: "default" | "session" | "transient";
+  pin: boolean;
+  sessionDefaultProvider: string;
+  sessionDefaultModel: string;
+  activeProvider?: string;
+  activeModel?: string;
+};
+
+async function resolveChatSendModelOverride(params: {
+  cfg: ReturnType<typeof loadSessionEntry>["cfg"];
+  entry: ReturnType<typeof loadSessionEntry>["entry"];
+  sessionKey: string;
+  context: GatewayRequestContext;
+  rawProvider?: string;
+  rawModel?: string;
+}): Promise<
+  { ok: true; override?: { provider: string; model: string } } | { ok: false; error: string }
+> {
+  const rawModel = params.rawModel?.trim();
+  const rawProvider = params.rawProvider?.trim();
+  if (!rawModel && !rawProvider) {
+    return { ok: true };
+  }
+  if (rawProvider && !rawModel) {
+    return { ok: false, error: "model override requires a model when provider is set" };
+  }
+  if (!rawModel) {
+    return { ok: true };
+  }
+
+  const sessionAgentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+  });
+  const defaultModelRef = resolveSessionModelRef(params.cfg, params.entry, sessionAgentId);
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: defaultModelRef.provider,
+  });
+  const resolved = resolveModelRefFromString({
+    raw: rawProvider ? `${rawProvider}/${rawModel}` : rawModel,
+    defaultProvider: defaultModelRef.provider,
+    aliasIndex,
+  });
+  if (!resolved) {
+    return {
+      ok: false,
+      error: `unknown model override: ${rawProvider ? `${rawProvider}/` : ""}${rawModel}`,
+    };
+  }
+
+  const catalog = await params.context.loadGatewayModelCatalog();
+  const allowed = buildAllowedModelSet({
+    cfg: params.cfg,
+    catalog,
+    defaultProvider: defaultModelRef.provider,
+    defaultModel: defaultModelRef.model,
+    agentId: sessionAgentId,
+  });
+  const key = modelKey(resolved.ref.provider, resolved.ref.model);
+  if (allowed.allowedKeys.size > 0 && !allowed.allowedKeys.has(key)) {
+    return { ok: false, error: `model override not allowed for this session: ${key}` };
+  }
+
+  return {
+    ok: true,
+    override: {
+      provider: resolved.ref.provider,
+      model: resolved.ref.model,
+    },
+  };
+}
+
+function buildChatSelectionMetadata(params: {
+  sessionDefaultProvider: string;
+  sessionDefaultModel: string;
+  transientModelOverride?: { provider: string; model: string };
+  pinModel: boolean;
+  sessionEntry?: { providerOverride?: string; modelOverride?: string };
+}): ChatSelectionMetadata {
+  if (params.transientModelOverride?.model) {
+    return {
+      provider: params.transientModelOverride.provider,
+      model: params.transientModelOverride.model,
+      source: "transient",
+      pin: params.pinModel,
+      sessionDefaultProvider: params.sessionDefaultProvider,
+      sessionDefaultModel: params.sessionDefaultModel,
+    };
+  }
+  if (params.sessionEntry?.modelOverride?.trim() || params.sessionEntry?.providerOverride?.trim()) {
+    return {
+      provider: params.sessionDefaultProvider,
+      model: params.sessionDefaultModel,
+      source: "session",
+      pin: false,
+      sessionDefaultProvider: params.sessionDefaultProvider,
+      sessionDefaultModel: params.sessionDefaultModel,
+    };
+  }
+  return {
+    provider: params.sessionDefaultProvider,
+    model: params.sessionDefaultModel,
+    source: "default",
+    pin: false,
+    sessionDefaultProvider: params.sessionDefaultProvider,
+    sessionDefaultModel: params.sessionDefaultModel,
+  };
 }
 
 /**
@@ -1140,6 +1270,7 @@ function broadcastChatFinal(params: {
   runId: string;
   sessionKey: string;
   message?: Record<string, unknown>;
+  selection?: ChatSelectionMetadata;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
   const strippedEnvelopeMessage = stripEnvelopeFromMessage(params.message) as
@@ -1150,6 +1281,7 @@ function broadcastChatFinal(params: {
     sessionKey: params.sessionKey,
     seq,
     state: "final" as const,
+    ...(params.selection ? { selection: params.selection } : {}),
     message: stripInlineDirectiveTagsFromMessageForDisplay(strippedEnvelopeMessage),
   };
   params.context.broadcast("chat", payload);
@@ -1189,6 +1321,7 @@ function broadcastChatError(params: {
   runId: string;
   sessionKey: string;
   errorMessage?: string;
+  selection?: ChatSelectionMetadata;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
   const payload = {
@@ -1196,6 +1329,7 @@ function broadcastChatError(params: {
     sessionKey: params.sessionKey,
     seq,
     state: "error" as const,
+    ...(params.selection ? { selection: params.selection } : {}),
     errorMessage: params.errorMessage,
   };
   params.context.broadcast("chat", payload);
@@ -1381,6 +1515,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const p = params as {
       sessionKey: string;
       message: string;
+      provider?: string;
+      model?: string;
+      pinModel?: boolean;
       thinking?: string;
       reasoning?: string;
       deliver?: boolean;
@@ -1468,6 +1605,52 @@ export const chatHandlers: GatewayRequestHandlers = {
     // media:// markers from leaking into prompts for text-only model runs.
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const allowModelOverride = resolveAllowModelOverrideFromClient(client);
+    const requestedModelOverride = Boolean(p.provider?.trim() || p.model?.trim());
+    if (p.pinModel && !requestedModelOverride) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "pinModel requires a provider or model override on this request.",
+        ),
+      );
+      return;
+    }
+    if (requestedModelOverride && !allowModelOverride) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "provider/model overrides are not authorized for this caller.",
+        ),
+      );
+      return;
+    }
+    const modelOverrideResult = await resolveChatSendModelOverride({
+      cfg,
+      entry,
+      sessionKey,
+      context,
+      rawProvider: allowModelOverride ? p.provider : undefined,
+      rawModel: allowModelOverride ? p.model : undefined,
+    });
+    if (!modelOverrideResult.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, modelOverrideResult.error));
+      return;
+    }
+    const transientModelOverride = modelOverrideResult.override;
+    const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+    const sessionDefaultModelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
+    let chatSelection = buildChatSelectionMetadata({
+      sessionDefaultProvider: sessionDefaultModelRef.provider,
+      sessionDefaultModel: sessionDefaultModelRef.model,
+      transientModelOverride,
+      pinModel: p.pinModel === true,
+      sessionEntry: entry,
+    });
 
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
@@ -1524,16 +1707,20 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const activeExisting = context.chatAbortControllers.get(clientRunId);
     if (activeExisting) {
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
+      respond(
+        true,
+        { runId: clientRunId, status: "in_flight" as const, selection: chatSelection },
+        undefined,
+        {
+          cached: true,
+          runId: clientRunId,
+        },
+      );
       return;
     }
 
     if (normalizedAttachments.length > 0) {
-      const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-      const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
+      const modelRef = transientModelOverride ?? resolveSessionModelRef(cfg, entry, sessionAgentId);
       const supportsImages = await resolveGatewayModelSupportsImages({
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         provider: modelRef.provider,
@@ -1582,6 +1769,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
+        selection: chatSelection,
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
@@ -1662,6 +1850,24 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
+      let agentEventRunId: string | undefined;
+      const handleModelSelected = (selected: {
+        provider: string;
+        model: string;
+        thinkLevel: string | undefined;
+      }) => {
+        chatSelection = {
+          ...chatSelection,
+          activeProvider: selected.provider,
+          activeModel: selected.model,
+        };
+        if (agentEventRunId) {
+          context.updateChatRun(agentEventRunId, clientRunId, sessionKey, {
+            selection: chatSelection,
+          });
+        }
+        onModelSelected(selected);
+      };
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let userTranscriptUpdatePromise: Promise<void> | null = null;
       const emitUserTranscriptUpdate = async () => {
@@ -1757,9 +1963,21 @@ export const chatHandlers: GatewayRequestHandlers = {
           images: parsedImages.length > 0 ? parsedImages : undefined,
           imageOrder: parsedImageOrder.length > 0 ? parsedImageOrder : undefined,
           reasoningLevelOverride: injectReasoningOverride ? reasoningLevelOverride : undefined,
-          imageOrder: parsedImageOrder.length > 0 ? parsedImageOrder : undefined,
+          transientModelOverride:
+            transientModelOverride && transientModelOverride.model
+              ? {
+                  ...transientModelOverride,
+                  pin: p.pinModel === true,
+                }
+              : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
+            agentEventRunId = runId;
+            context.addChatRun(runId, {
+              sessionKey,
+              clientRunId,
+              selection: chatSelection,
+            });
             void emitUserTranscriptUpdate();
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
@@ -1778,7 +1996,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               }
             }
           },
-          onModelSelected,
+          onModelSelected: handleModelSelected,
         },
       })
         .then(async () => {
@@ -1810,6 +2028,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 context,
                 runId: clientRunId,
                 sessionKey,
+                selection: chatSelection,
               });
             } else {
               const combinedReply = deliveredReplies
@@ -1855,6 +2074,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 runId: clientRunId,
                 sessionKey,
                 message,
+                selection: chatSelection,
               });
             }
           } else {
@@ -1866,7 +2086,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             entry: {
               ts: Date.now(),
               ok: true,
-              payload: { runId: clientRunId, status: "ok" as const },
+              payload: { runId: clientRunId, status: "ok" as const, selection: chatSelection },
             },
           });
         })
@@ -1892,6 +2112,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 runId: clientRunId,
                 status: "error" as const,
                 summary: String(err),
+                selection: chatSelection,
               },
               error,
             },
@@ -1901,6 +2122,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             runId: clientRunId,
             sessionKey,
             errorMessage: String(err),
+            selection: chatSelection,
           });
         })
         .finally(() => {
@@ -1912,6 +2134,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
         status: "error" as const,
         summary: String(err),
+        selection: chatSelection,
       };
       setGatewayDedupeEntry({
         dedupe: context.dedupe,

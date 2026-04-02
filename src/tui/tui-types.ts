@@ -16,6 +16,16 @@ export type ChatEvent = {
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
+  selection?: {
+    provider: string;
+    model: string;
+    source: "default" | "session" | "transient";
+    pin: boolean;
+    sessionDefaultProvider: string;
+    sessionDefaultModel: string;
+    activeProvider?: string;
+    activeModel?: string;
+  };
 };
 
 export type BtwEvent = {

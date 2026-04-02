@@ -132,6 +132,53 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Fast: on");
   });
 
+  it("shows transient model selection as this-turn-only when not pinned", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      transientModelOverride: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+    });
+
+    expect(normalizeTestText(text)).toContain("Selection: transient override · this turn only");
+  });
+
+  it("shows transient model selection as pinned when requested", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      transientModelOverride: {
+        provider: "openai",
+        model: "gpt-5.4",
+        pin: true,
+      },
+    });
+
+    expect(normalizeTestText(text)).toContain(
+      "Selection: transient override · pinned for deferred work",
+    );
+  });
+
   it("shows configured text verbosity for the active model", () => {
     const text = buildStatusMessage({
       config: {
@@ -727,7 +774,9 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
+    expect(normalized).toContain("Model: anthropic/claude-opus-4-5");
+    expect(normalized).toContain("session default openai/gpt-4.1-mini");
+    expect(normalized).toContain("api-key");
     expect(normalized).toContain("Fallback: anthropic/claude-haiku-4-5");
     expect(normalized).toContain("(rate limit)");
     expect(normalized).not.toContain(" - Reason:");

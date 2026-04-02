@@ -71,6 +71,8 @@ public struct OpenClawChatView: View {
             VStack(spacing: Layout.stackSpacing) {
                 self.messageList
                     .padding(.horizontal, Layout.outerPaddingHorizontal)
+                self.runSelectionBanner
+                    .padding(.horizontal, Layout.outerPaddingHorizontal)
                 OpenClawChatComposer(
                     viewModel: self.viewModel,
                     style: self.style,
@@ -89,6 +91,56 @@ public struct OpenClawChatView: View {
             } else {
                 EmptyView()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var runSelectionBanner: some View {
+        if let selection = self.viewModel.runSelection {
+            let selectedLabel = self.selectionLabel(
+                provider: selection.provider,
+                model: selection.model)
+            let activeLabel = if let activeProvider = selection.activeProvider,
+                                 let activeModel = selection.activeModel
+            {
+                self.selectionLabel(provider: activeProvider, model: activeModel)
+            } else {
+                nil
+            }
+            let sourceLabel: String = switch selection.source {
+            case "transient":
+                selection.pin ? "This run pinned" : "This run only"
+            case "session":
+                "Session default"
+            default:
+                "Gateway default"
+            }
+            let detail = self.runSelectionDetail(
+                selection: selection,
+                selectedLabel: selectedLabel,
+                activeLabel: activeLabel)
+
+            HStack {
+                Label {
+                    Text("\(sourceLabel): \(activeLabel ?? selectedLabel)")
+                        .lineLimit(1)
+                } icon: {
+                    Image(systemName: "brain")
+                }
+                .font(.system(.caption, design: .rounded, weight: .medium))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(OpenClawChatTheme.runSelectionBackground)
+                .foregroundStyle(OpenClawChatTheme.runSelectionForeground)
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(OpenClawChatTheme.runSelectionBorder, lineWidth: 1))
+                .clipShape(Capsule(style: .continuous))
+                .help(detail)
+
+                Spacer(minLength: 0)
+            }
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
     }
 
@@ -343,6 +395,28 @@ public struct OpenClawChatView: View {
             return ("Timed out", "clock.badge.exclamationmark", .orange)
         }
         return ("Error", "exclamationmark.triangle.fill", .orange)
+    }
+
+    private func selectionLabel(provider: String, model: String) -> String {
+        "\(provider)/\(model)"
+    }
+
+    private func runSelectionDetail(
+        selection: OpenClawChatSelectionMetadata,
+        selectedLabel: String,
+        activeLabel: String?) -> String
+    {
+        let sessionDefault = self.selectionLabel(
+            provider: selection.sessionDefaultProvider,
+            model: selection.sessionDefaultModel)
+        var parts = ["Selected: \(selectedLabel)"]
+        if selection.source == "transient" {
+            parts.append("Session default: \(sessionDefault)")
+        }
+        if let activeLabel, activeLabel != selectedLabel {
+            parts.append("Active runtime: \(activeLabel)")
+        }
+        return parts.joined(separator: " • ")
     }
 
     private func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {

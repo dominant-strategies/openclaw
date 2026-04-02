@@ -36,6 +36,9 @@ export const ChatSendParamsSchema = Type.Object(
   {
     sessionKey: ChatSendSessionKeyString,
     message: Type.String(),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    pinModel: Type.Optional(Type.Boolean()),
     thinking: Type.Optional(Type.String()),
     reasoning: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
@@ -69,6 +72,24 @@ export const ChatInjectParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ChatSelectionMetadataSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    model: NonEmptyString,
+    source: Type.Union([
+      Type.Literal("default"),
+      Type.Literal("session"),
+      Type.Literal("transient"),
+    ]),
+    pin: Type.Boolean(),
+    sessionDefaultProvider: NonEmptyString,
+    sessionDefaultModel: NonEmptyString,
+    activeProvider: Type.Optional(NonEmptyString),
+    activeModel: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const ChatEventSchema = Type.Object(
   {
     runId: NonEmptyString,
@@ -84,6 +105,7 @@ export const ChatEventSchema = Type.Object(
     errorMessage: Type.Optional(Type.String()),
     usage: Type.Optional(Type.Unknown()),
     stopReason: Type.Optional(Type.String()),
+    selection: Type.Optional(ChatSelectionMetadataSchema),
   },
   { additionalProperties: false },
 );

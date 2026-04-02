@@ -128,6 +128,9 @@ export function refreshQueuedFollowupSession(params: {
       }
     }
     if (shouldRewriteSelection) {
+      if (run.pinnedModel) {
+        return;
+      }
       if (typeof params.nextProvider === "string") {
         run.provider = params.nextProvider;
       }

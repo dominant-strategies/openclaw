@@ -11,6 +11,7 @@ import {
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
+  piSdkMock,
   rpcReq,
   testState,
   trackConnectChallengeNonce,
@@ -761,6 +762,116 @@ describe("gateway server chat", () => {
           };
           expect(stored["agent:main:main"]?.sessionId).toBe("sess-main");
         } finally {
+          scopedWs?.close();
+        }
+      });
+    });
+  });
+
+  test("chat.send supports transient model overrides without changing the session default", async () => {
+    await withGatewayServer(async ({ port }) => {
+      await withMainSessionStore(async () => {
+        let scopedWs: WebSocket | undefined;
+        const previousModels = [...piSdkMock.models];
+
+        try {
+          piSdkMock.models = [
+            { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+            { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+          ];
+          await writeSessionStore({
+            entries: {
+              main: {
+                sessionId: "sess-main",
+                updatedAt: Date.now(),
+                providerOverride: "anthropic",
+                modelOverride: "claude-opus-4-6",
+              },
+            },
+          });
+
+          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          trackConnectChallengeNonce(scopedWs);
+          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await connectOk(scopedWs, {
+            scopes: ["operator.write", "operator.admin"],
+          });
+
+          const modelsRes = await rpcReq<{ models?: Array<{ provider?: string; id?: string }> }>(
+            scopedWs,
+            "models.list",
+            {},
+          );
+          expect(modelsRes.ok).toBe(true);
+          expect(modelsRes.payload?.models).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ provider: "anthropic", id: "claude-opus-4-6" }),
+              expect.objectContaining({ provider: "openai", id: "gpt-5.4" }),
+            ]),
+          );
+
+          mockGetReplyFromConfigOnce(async () => undefined);
+          const transientRes = await rpcReq<{
+            runId?: string;
+            selection?: {
+              provider?: string;
+              model?: string;
+              source?: string;
+              pin?: boolean;
+              sessionDefaultProvider?: string;
+              sessionDefaultModel?: string;
+            };
+          }>(scopedWs, "chat.send", {
+            sessionKey: "main",
+            message: "hello from remote",
+            idempotencyKey: "idem-hybrid-remote",
+            provider: "openai",
+            model: "gpt-5.4",
+            pinModel: true,
+          });
+          expect(transientRes.ok).toBe(true);
+          expect(transientRes.payload?.selection).toMatchObject({
+            provider: "openai",
+            model: "gpt-5.4",
+            source: "transient",
+            pin: true,
+            sessionDefaultProvider: "anthropic",
+            sessionDefaultModel: "claude-opus-4-6",
+          });
+
+          mockGetReplyFromConfigOnce(async () => undefined);
+          const sessionDefaultRes = await rpcReq<{
+            runId?: string;
+            selection?: {
+              provider?: string;
+              model?: string;
+              source?: string;
+              pin?: boolean;
+            };
+          }>(scopedWs, "chat.send", {
+            sessionKey: "main",
+            message: "hello from default",
+            idempotencyKey: "idem-hybrid-default",
+          });
+          expect(sessionDefaultRes.ok).toBe(true);
+          expect(sessionDefaultRes.payload?.selection).toMatchObject({
+            provider: "anthropic",
+            model: "claude-opus-4-6",
+            source: "session",
+            pin: false,
+          });
+
+          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              providerOverride?: string;
+              modelOverride?: string;
+            };
+          };
+          expect(stored["agent:main:main"]?.providerOverride).toBe("anthropic");
+          expect(stored["agent:main:main"]?.modelOverride).toBe("claude-opus-4-6");
+        } finally {
+          piSdkMock.models = previousModels;
           scopedWs?.close();
         }
       });

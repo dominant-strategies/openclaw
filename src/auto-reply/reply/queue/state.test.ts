@@ -59,4 +59,45 @@ describe("refreshQueuedFollowupSession", () => {
       authProfileIdSource: undefined,
     });
   });
+
+  it("preserves pinned queued runs when session selection changes", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "queue" });
+    const lastRun = {
+      ...makeRun(),
+      provider: "openai",
+      model: "gpt-5.4",
+      pinnedModel: true,
+      authProfileId: "profile-pinned",
+    };
+    const queuedRun: FollowupRun = {
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: {
+        ...lastRun,
+      },
+    };
+    queue.lastRun = lastRun;
+    queue.items.push(queuedRun);
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "anthropic",
+      nextModel: "claude-opus-4-6",
+      nextAuthProfileId: "profile-default",
+      nextAuthProfileIdSource: "auto",
+    });
+
+    expect(queue.lastRun).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+      pinnedModel: true,
+      authProfileId: "profile-pinned",
+    });
+    expect(queue.items[0]?.run).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+      pinnedModel: true,
+      authProfileId: "profile-pinned",
+    });
+  });
 });

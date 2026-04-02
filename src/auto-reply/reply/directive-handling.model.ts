@@ -9,7 +9,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { shortenHomePath } from "../../utils.js";
-import { resolveSelectedAndActiveModel } from "../model-runtime.js";
+import { formatProviderModelRef, resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
 import { buildBrowseProvidersButton } from "./commands-models.telegram.js";
@@ -199,7 +199,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   resetModelOverride: boolean;
   surface?: string;
-  sessionEntry?: Pick<SessionEntry, "modelProvider" | "model">;
+  sessionEntry?: Pick<
+    SessionEntry,
+    "modelProvider" | "model" | "providerOverride" | "modelOverride"
+  >;
 }): Promise<ReplyPayload | undefined> {
   if (!params.directives.hasModelDirective) {
     return undefined;
@@ -241,16 +244,23 @@ export async function maybeHandleModelDirectiveInfo(params: {
       sessionEntry: params.sessionEntry,
     });
     const current = modelRefs.selected.label;
+    const sessionDefaultProvider =
+      params.sessionEntry?.providerOverride?.trim() || params.defaultProvider;
+    const sessionDefaultModel = params.sessionEntry?.modelOverride?.trim() || params.defaultModel;
+    const sessionDefaultLabel = formatProviderModelRef(sessionDefaultProvider, sessionDefaultModel);
     const isTelegram = params.surface === "telegram";
     const activeRuntimeLine = modelRefs.activeDiffers
       ? `Active: ${modelRefs.active.label} (runtime)`
       : null;
+    const sessionDefaultLine =
+      sessionDefaultLabel !== current ? `Session default: ${sessionDefaultLabel}` : null;
 
     if (isTelegram) {
       const buttons = buildBrowseProvidersButton();
       return {
         text: [
-          `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
+          `This run: ${current}`,
+          sessionDefaultLine,
           activeRuntimeLine,
           "",
           "Tap below to browse models, or use:",
@@ -265,7 +275,8 @@ export async function maybeHandleModelDirectiveInfo(params: {
 
     return {
       text: [
-        `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
+        `This run: ${current}`,
+        sessionDefaultLine,
         activeRuntimeLine,
         "",
         "Switch: /model <provider/model>",
@@ -306,9 +317,14 @@ export async function maybeHandleModelDirectiveInfo(params: {
     sessionEntry: params.sessionEntry,
   });
   const current = modelRefs.selected.label;
+  const sessionDefaultProvider =
+    params.sessionEntry?.providerOverride?.trim() || params.defaultProvider;
+  const sessionDefaultModel = params.sessionEntry?.modelOverride?.trim() || params.defaultModel;
+  const sessionDefaultLabel = formatProviderModelRef(sessionDefaultProvider, sessionDefaultModel);
   const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
   const lines = [
-    `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
+    `This run: ${current}`,
+    sessionDefaultLabel !== current ? `Session default: ${sessionDefaultLabel}` : null,
     modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
     `Default: ${defaultLabel}`,
     `Agent: ${params.activeAgentId}`,

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { parseModelRef } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
@@ -113,6 +114,76 @@ function resolveResetSessionNoticeRoute(params: {
     return null;
   }
   return { channel, to };
+}
+
+function resolveStoredSessionDefaultModelRef(params: {
+  defaultProvider: string;
+  defaultModel: string;
+  sessionEntry?: Pick<SessionEntry, "modelOverride" | "providerOverride">;
+}): { provider: string; model: string } {
+  const storedModelOverride = params.sessionEntry?.modelOverride?.trim();
+  if (!storedModelOverride) {
+    return {
+      provider: params.defaultProvider,
+      model: params.defaultModel,
+    };
+  }
+  const overrideProvider = params.sessionEntry?.providerOverride?.trim() || params.defaultProvider;
+  const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
+  if (parsedOverride) {
+    return parsedOverride;
+  }
+  return {
+    provider: overrideProvider,
+    model: storedModelOverride,
+  };
+}
+
+function resolveQueuedRunSelection(params: {
+  provider: string;
+  model: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  transientModelOverride?: GetReplyOptions["transientModelOverride"];
+  defaultProvider: string;
+  defaultModel: string;
+  sessionEntry?: Pick<
+    SessionEntry,
+    "modelOverride" | "providerOverride" | "authProfileOverride" | "authProfileOverrideSource"
+  >;
+}): {
+  provider: string;
+  model: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  pinnedModel: boolean;
+} {
+  const hasTransientOverride = Boolean(params.transientModelOverride?.model?.trim());
+  const pinnedModel = params.transientModelOverride?.pin === true;
+  if (!hasTransientOverride || pinnedModel) {
+    return {
+      provider: params.provider,
+      model: params.model,
+      authProfileId: params.authProfileId,
+      authProfileIdSource: params.authProfileId ? params.authProfileIdSource : undefined,
+      pinnedModel,
+    };
+  }
+
+  const sessionDefault = resolveStoredSessionDefaultModelRef({
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+    sessionEntry: params.sessionEntry,
+  });
+  const sameProviderAsCurrent = sessionDefault.provider === params.provider;
+  return {
+    provider: sessionDefault.provider,
+    model: sessionDefault.model,
+    authProfileId: sameProviderAsCurrent ? params.authProfileId : undefined,
+    authProfileIdSource:
+      sameProviderAsCurrent && params.authProfileId ? params.authProfileIdSource : undefined,
+    pinnedModel: false,
+  };
 }
 
 async function sendResetSessionNotice(params: {
@@ -518,6 +589,16 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+  const queuedRunSelection = resolveQueuedRunSelection({
+    provider,
+    model,
+    authProfileId,
+    authProfileIdSource,
+    transientModelOverride: opts?.transientModelOverride,
+    defaultProvider,
+    defaultModel,
+    sessionEntry,
+  });
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
@@ -556,6 +637,11 @@ export async function runPreparedReply(
       skillsSnapshot,
       provider,
       model,
+      pinnedModel: queuedRunSelection.pinnedModel,
+      queuedProvider: queuedRunSelection.provider,
+      queuedModel: queuedRunSelection.model,
+      queuedAuthProfileId: queuedRunSelection.authProfileId,
+      queuedAuthProfileIdSource: queuedRunSelection.authProfileIdSource,
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,

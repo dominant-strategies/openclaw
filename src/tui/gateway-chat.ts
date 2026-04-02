@@ -206,9 +206,35 @@ export class GatewayChatClient {
     await this.readyPromise;
   }
 
-  async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
+  async sendChat(opts: ChatSendOptions): Promise<{
+    runId: string;
+    status?: "started" | "in_flight" | "ok" | "error";
+    selection?: {
+      provider: string;
+      model: string;
+      source: "default" | "session" | "transient";
+      pin: boolean;
+      sessionDefaultProvider: string;
+      sessionDefaultModel: string;
+      activeProvider?: string;
+      activeModel?: string;
+    };
+  }> {
     const runId = opts.runId ?? randomUUID();
-    await this.client.request("chat.send", {
+    const response = await this.client.request<{
+      runId?: string;
+      status?: "started" | "in_flight" | "ok" | "error";
+      selection?: {
+        provider: string;
+        model: string;
+        source: "default" | "session" | "transient";
+        pin: boolean;
+        sessionDefaultProvider: string;
+        sessionDefaultModel: string;
+        activeProvider?: string;
+        activeModel?: string;
+      };
+    }>("chat.send", {
       sessionKey: opts.sessionKey,
       message: opts.message,
       thinking: opts.thinking,
@@ -216,7 +242,11 @@ export class GatewayChatClient {
       timeoutMs: opts.timeoutMs,
       idempotencyKey: runId,
     });
-    return { runId };
+    return {
+      runId: response.runId ?? runId,
+      status: response.status,
+      selection: response.selection,
+    };
   }
 
   async abortChat(opts: { sessionKey: string; runId: string }) {

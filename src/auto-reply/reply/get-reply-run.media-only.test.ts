@@ -322,6 +322,23 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.messageProvider).toBe("webchat");
   });
 
+  it("marks transient model overrides as pinned when requested", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          transientModelOverride: {
+            provider: "openai",
+            model: "gpt-5.4",
+            pin: true,
+          },
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.pinnedModel).toBe(true);
+  });
+
   it("prefers Provider over Surface when origin channel is missing", async () => {
     await runPreparedReply(
       baseParams({

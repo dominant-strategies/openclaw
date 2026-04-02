@@ -161,6 +161,26 @@ enum OpenClawChatTheme {
     static var divider: Color {
         Color.secondary.opacity(0.2)
     }
+
+    static var runSelectionBackground: Color {
+        #if os(macOS)
+        Color(nsColor: .controlBackgroundColor).opacity(0.9)
+        #else
+        Color(uiColor: .secondarySystemBackground).opacity(0.95)
+        #endif
+    }
+
+    static var runSelectionForeground: Color {
+        #if os(macOS)
+        Color(nsColor: .systemBlue)
+        #else
+        Color(uiColor: .systemBlue)
+        #endif
+    }
+
+    static var runSelectionBorder: Color {
+        self.runSelectionForeground.opacity(0.28)
+    }
 }
 
 enum OpenClawPlatformImageFactory {

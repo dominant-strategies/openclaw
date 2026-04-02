@@ -147,6 +147,7 @@ function createChatHeaderState(
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    chatSelection: null,
     chatQueue: [],
     chatMessages: [],
     chatLoading: false,
@@ -197,6 +198,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     streamSegments: [],
     stream: null,
     streamStartedAt: null,
+    runSelection: null,
     assistantAvatarUrl: null,
     draft: "",
     queue: [],
@@ -642,6 +644,57 @@ describe("chat view", () => {
     expect(indicator).not.toBeNull();
     expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
     nowSpy.mockRestore();
+  });
+
+  it("renders transient run selection indicator", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          runSelection: {
+            provider: "openai",
+            model: "gpt-5.4",
+            source: "transient",
+            pin: true,
+            sessionDefaultProvider: "anthropic",
+            sessionDefaultModel: "claude-opus-4-6",
+          },
+        }),
+      ),
+      container,
+    );
+
+    const indicator = container.querySelector(".compaction-indicator--model-selection");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("This run pinned: openai/gpt-5.4");
+    expect(indicator?.getAttribute("title")).toContain(
+      "Session default: anthropic/claude-opus-4-6",
+    );
+  });
+
+  it("renders runtime-selected model when it differs from the selected run model", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          runSelection: {
+            provider: "openai",
+            model: "gpt-5.4",
+            source: "transient",
+            pin: false,
+            sessionDefaultProvider: "anthropic",
+            sessionDefaultModel: "claude-opus-4-6",
+            activeProvider: "openai",
+            activeModel: "gpt-5.4-mini",
+          },
+        }),
+      ),
+      container,
+    );
+
+    const indicator = container.querySelector(".compaction-indicator--model-selection");
+    expect(indicator?.textContent).toContain("This run only: openai/gpt-5.4-mini");
+    expect(indicator?.getAttribute("title")).toContain("Active runtime: openai/gpt-5.4-mini");
   });
 
   it("shows a stop button when aborting is available", () => {

@@ -63,6 +63,13 @@ export type FollowupRun = {
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
+    /** Preserve this run's model selection when queued session defaults change. */
+    pinnedModel?: boolean;
+    /** Optional queued-run selection when deferred work should differ from the current turn. */
+    queuedProvider?: string;
+    queuedModel?: string;
+    queuedAuthProfileId?: string;
+    queuedAuthProfileIdSource?: "auto" | "user";
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;

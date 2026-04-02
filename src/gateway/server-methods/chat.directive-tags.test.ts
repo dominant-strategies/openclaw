@@ -245,8 +245,11 @@ function createChatContext(): Pick<
   | "chatDeltaSentAt"
   | "chatDeltaLastBroadcastSignature"
   | "chatAbortedRuns"
+  | "addChatRun"
+  | "updateChatRun"
   | "removeChatRun"
   | "dedupe"
+  | "loadGatewayModelCatalog"
   | "registerToolEventRecipient"
   | "logGateway"
 > {
@@ -259,8 +262,22 @@ function createChatContext(): Pick<
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastSignature: new Map(),
     chatAbortedRuns: new Map(),
+    addChatRun: vi.fn(),
+    updateChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),
+    loadGatewayModelCatalog: vi.fn().mockResolvedValue([
+      {
+        provider: "anthropic",
+        id: "claude-opus-4-6",
+        input: ["text", "image"],
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        input: ["text", "image"],
+      },
+    ]),
     registerToolEventRecipient: vi.fn(),
     logGateway: {
       warn: vi.fn(),
@@ -375,6 +392,52 @@ describe("chat.send reasoning overrides", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     const error = respond.mock.calls[0]?.[2] as { message?: string } | undefined;
     expect(error?.message).toContain('invalid reasoning (use "on"|"off"|"stream")');
+  });
+
+  it("returns selection metadata for transient model overrides", async () => {
+    const context = createChatContext();
+    const respond = vi.fn();
+    mockState.sessionEntry = {
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    };
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-selection-started",
+      client: {
+        internal: {
+          allowModelOverride: true,
+        },
+      },
+      requestParams: {
+        provider: "openai",
+        model: "gpt-5.4",
+        pinModel: true,
+      },
+    });
+
+    const ack = respond.mock.calls[0]?.[1] as
+      | {
+          selection?: {
+            provider?: string;
+            model?: string;
+            source?: string;
+            pin?: boolean;
+            sessionDefaultProvider?: string;
+            sessionDefaultModel?: string;
+          };
+        }
+      | undefined;
+    expect(ack?.selection).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+      source: "transient",
+      pin: true,
+      sessionDefaultProvider: "anthropic",
+      sessionDefaultModel: "claude-opus-4-6",
+    });
   });
 });
 

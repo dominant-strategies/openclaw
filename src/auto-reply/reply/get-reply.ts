@@ -146,6 +146,21 @@ export async function getReplyFromConfig(
   });
   let provider = defaultProvider;
   let model = defaultModel;
+  const transientModelOverrideRaw = opts?.transientModelOverride;
+  if (transientModelOverrideRaw?.model?.trim()) {
+    const transientRaw = transientModelOverrideRaw.provider?.trim()
+      ? `${transientModelOverrideRaw.provider.trim()}/${transientModelOverrideRaw.model.trim()}`
+      : transientModelOverrideRaw.model.trim();
+    const transientRef = resolveModelRefFromString({
+      raw: transientRaw,
+      defaultProvider,
+      aliasIndex,
+    });
+    if (transientRef) {
+      provider = transientRef.ref.provider;
+      model = transientRef.ref.model;
+    }
+  }
   let hasResolvedHeartbeatModelOverride = false;
   if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,

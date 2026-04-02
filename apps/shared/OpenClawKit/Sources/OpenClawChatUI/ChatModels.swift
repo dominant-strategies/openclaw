@@ -256,9 +256,47 @@ public struct OpenClawSessionsPreviewPayload: Codable, Sendable {
     }
 }
 
+public struct OpenClawChatSelectionMetadata: Codable, Sendable {
+    public let provider: String
+    public let model: String
+    public let source: String
+    public let pin: Bool
+    public let sessionDefaultProvider: String
+    public let sessionDefaultModel: String
+    public let activeProvider: String?
+    public let activeModel: String?
+
+    public init(
+        provider: String,
+        model: String,
+        source: String,
+        pin: Bool,
+        sessionDefaultProvider: String,
+        sessionDefaultModel: String,
+        activeProvider: String? = nil,
+        activeModel: String? = nil)
+    {
+        self.provider = provider
+        self.model = model
+        self.source = source
+        self.pin = pin
+        self.sessionDefaultProvider = sessionDefaultProvider
+        self.sessionDefaultModel = sessionDefaultModel
+        self.activeProvider = activeProvider
+        self.activeModel = activeModel
+    }
+}
+
 public struct OpenClawChatSendResponse: Codable, Sendable {
     public let runId: String
     public let status: String
+    public let selection: OpenClawChatSelectionMetadata?
+
+    public init(runId: String, status: String, selection: OpenClawChatSelectionMetadata? = nil) {
+        self.runId = runId
+        self.status = status
+        self.selection = selection
+    }
 }
 
 public struct OpenClawChatEventPayload: Codable, Sendable {
@@ -267,6 +305,23 @@ public struct OpenClawChatEventPayload: Codable, Sendable {
     public let state: String?
     public let message: AnyCodable?
     public let errorMessage: String?
+    public let selection: OpenClawChatSelectionMetadata?
+
+    public init(
+        runId: String?,
+        sessionKey: String?,
+        state: String?,
+        message: AnyCodable?,
+        errorMessage: String?,
+        selection: OpenClawChatSelectionMetadata? = nil)
+    {
+        self.runId = runId
+        self.sessionKey = sessionKey
+        self.state = state
+        self.message = message
+        self.errorMessage = errorMessage
+        self.selection = selection
+    }
 }
 
 public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {

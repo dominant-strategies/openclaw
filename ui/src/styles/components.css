@@ -1436,6 +1436,12 @@
   border-color: rgba(34, 197, 94, 0.35);
 }
 
+.compaction-indicator--model-selection {
+  color: var(--info);
+  border-color: rgba(59, 130, 246, 0.28);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.03) 100%);
+}
+
 @keyframes compaction-spin {
   to {
     transform: rotate(360deg);

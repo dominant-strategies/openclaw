@@ -35,7 +35,7 @@ import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
-import type { ReplyPayload } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
@@ -109,6 +109,7 @@ export async function buildStatusReply(params: {
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
+  transientModelOverride?: GetReplyOptions["transientModelOverride"];
 }): Promise<ReplyPayload | undefined> {
   const { command } = params;
   if (!command.isAuthorizedSender) {
@@ -149,6 +150,7 @@ export async function buildStatusText(params: {
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;
   activeModelAuthOverride?: string;
+  transientModelOverride?: GetReplyOptions["transientModelOverride"];
 }): Promise<string> {
   const {
     cfg,
@@ -333,6 +335,7 @@ export async function buildStatusText(params: {
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
     activeModelAuth,
+    transientModelOverride: params.transientModelOverride,
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,

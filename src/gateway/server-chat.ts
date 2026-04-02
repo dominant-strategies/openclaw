@@ -143,12 +143,28 @@ function resolveMergedAssistantText(params: {
 export type ChatRunEntry = {
   sessionKey: string;
   clientRunId: string;
+  selection?: {
+    provider: string;
+    model: string;
+    source: "default" | "session" | "transient";
+    pin: boolean;
+    sessionDefaultProvider: string;
+    sessionDefaultModel: string;
+    activeProvider?: string;
+    activeModel?: string;
+  };
 };
 
 export type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunEntry) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
   shift: (sessionId: string) => ChatRunEntry | undefined;
+  update: (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey: string | undefined,
+    update: Partial<ChatRunEntry>,
+  ) => ChatRunEntry | undefined;
   remove: (sessionId: string, clientRunId: string, sessionKey?: string) => ChatRunEntry | undefined;
   clear: () => void;
 };
@@ -179,6 +195,28 @@ export function createChatRunRegistry(): ChatRunRegistry {
     return entry;
   };
 
+  const update = (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey: string | undefined,
+    update: Partial<ChatRunEntry>,
+  ) => {
+    const queue = chatRunSessions.get(sessionId);
+    if (!queue || queue.length === 0) {
+      return undefined;
+    }
+    const entry = queue.find(
+      (candidate) =>
+        candidate.clientRunId === clientRunId &&
+        (sessionKey ? candidate.sessionKey === sessionKey : true),
+    );
+    if (!entry) {
+      return undefined;
+    }
+    Object.assign(entry, update);
+    return entry;
+  };
+
   const remove = (sessionId: string, clientRunId: string, sessionKey?: string) => {
     const queue = chatRunSessions.get(sessionId);
     if (!queue || queue.length === 0) {
@@ -202,7 +240,7 @@ export function createChatRunRegistry(): ChatRunRegistry {
     chatRunSessions.clear();
   };
 
-  return { add, peek, shift, remove, clear };
+  return { add, peek, shift, update, remove, clear };
 }
 
 export type ChatRunState = {
@@ -978,6 +1016,7 @@ export function createAgentEventHandler({
     delta?: unknown,
     opts?: { force?: boolean },
   ) => {
+    const selection = chatRunState.registry.peek(sourceRunId)?.selection;
     const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
     const cleanedDelta =
       typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
@@ -1021,6 +1060,7 @@ export function createAgentEventHandler({
       sessionKey,
       seq,
       state: "delta" as const,
+      ...(selection ? { selection } : {}),
       message: {
         role: "assistant",
         content,
@@ -1051,6 +1091,7 @@ export function createAgentEventHandler({
     sourceRunId: string,
     seq: number,
   ) => {
+    const selection = chatRunState.registry.peek(sourceRunId)?.selection;
     const buffer = chatRunState.buffers.get(clientRunId) ?? createEmptyChatMessageBuffer();
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
     const shouldSuppressSilentLeadFragment = isSilentReplyLeadFragment(text);
@@ -1082,6 +1123,7 @@ export function createAgentEventHandler({
       sessionKey,
       seq,
       state: "delta" as const,
+      ...(selection ? { selection } : {}),
       message: {
         role: "assistant",
         content,
@@ -1103,6 +1145,7 @@ export function createAgentEventHandler({
     error?: unknown,
     stopReason?: string,
   ) => {
+    const selection = chatRunState.registry.peek(sourceRunId)?.selection;
     const buffer = chatRunState.buffers.get(clientRunId) ?? createEmptyChatMessageBuffer();
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
     // Flush any throttled delta so streaming clients receive the complete text
@@ -1123,6 +1166,7 @@ export function createAgentEventHandler({
         sessionKey,
         seq,
         state: "final" as const,
+        ...(selection ? { selection } : {}),
         ...(stopReason && { stopReason }),
         message:
           content.length > 0 && !shouldSuppressSilent
@@ -1142,6 +1186,7 @@ export function createAgentEventHandler({
       sessionKey,
       seq,
       state: "error" as const,
+      ...(selection ? { selection } : {}),
       errorMessage: error ? formatForLog(error) : undefined,
     };
     broadcast("chat", payload);

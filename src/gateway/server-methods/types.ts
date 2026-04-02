@@ -66,7 +66,40 @@ export type GatewayRequestContext = {
   chatRunBuffers: Map<string, ChatMessageBuffer>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastSignature: Map<string, string>;
-  addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
+  addChatRun: (
+    sessionId: string,
+    entry: {
+      sessionKey: string;
+      clientRunId: string;
+      selection?: {
+        provider: string;
+        model: string;
+        source: "default" | "session" | "transient";
+        pin: boolean;
+        sessionDefaultProvider: string;
+        sessionDefaultModel: string;
+        activeProvider?: string;
+        activeModel?: string;
+      };
+    },
+  ) => void;
+  updateChatRun: (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey: string | undefined,
+    update: {
+      selection?: {
+        provider: string;
+        model: string;
+        source: "default" | "session" | "transient";
+        pin: boolean;
+        sessionDefaultProvider: string;
+        sessionDefaultModel: string;
+        activeProvider?: string;
+        activeModel?: string;
+      };
+    },
+  ) => { sessionKey: string; clientRunId: string } | undefined;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,

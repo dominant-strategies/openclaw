@@ -99,6 +99,12 @@ export async function createGatewayRuntimeState(params: {
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastSignature: Map<string, string>;
   addChatRun: (sessionId: string, entry: ChatRunEntry) => void;
+  updateChatRun: (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey: string | undefined,
+    update: Partial<ChatRunEntry>,
+  ) => ChatRunEntry | undefined;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -240,6 +246,7 @@ export async function createGatewayRuntimeState(params: {
     const chatDeltaSentAt = chatRunState.deltaSentAt;
     const chatDeltaLastBroadcastSignature = chatRunState.deltaLastBroadcastSignature;
     const addChatRun = chatRunRegistry.add;
+    const updateChatRun = chatRunRegistry.update;
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const toolEventRecipients = createToolEventRecipientRegistry();
@@ -270,6 +277,7 @@ export async function createGatewayRuntimeState(params: {
       chatDeltaSentAt,
       chatDeltaLastBroadcastSignature,
       addChatRun,
+      updateChatRun,
       removeChatRun,
       chatAbortControllers,
       toolEventRecipients,
