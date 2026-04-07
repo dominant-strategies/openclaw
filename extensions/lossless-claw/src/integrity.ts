@@ -1,5 +1,5 @@
 import type { ConversationStore } from "./store/conversation-store.js";
-import type { SummaryStore, SummaryRecord, ContextItemRecord } from "./store/summary-store.js";
+import type { SummaryStore } from "./store/summary-store.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -405,7 +405,9 @@ export function repairPlan(report: IntegrityReport): string[] {
   const suggestions: string[] = [];
 
   for (const check of report.checks) {
-    if (check.status === "pass") continue;
+    if (check.status === "pass") {
+      continue;
+    }
 
     switch (check.name) {
       case "conversation_exists":

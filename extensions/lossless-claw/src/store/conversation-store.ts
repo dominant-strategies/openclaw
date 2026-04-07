@@ -229,7 +229,7 @@ function normalizeMessageContentForFullTextIndex(content: string): string | null
   const summaryLines: string[] = [];
   let inSummary = false;
   for (let index = 1; index < lines.length; index += 1) {
-    const line = lines[index]!;
+    const line = lines[index];
     if (line === "Exploration Summary:") {
       inSummary = true;
       continue;

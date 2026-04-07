@@ -195,9 +195,13 @@ function reasoningBlockFromPart(part: MessagePartRecord, rawType?: string): unkn
  * When we reassemble for the OpenAI provider we need the original back.
  */
 function tryRestoreOpenAIReasoning(raw: Record<string, unknown>): Record<string, unknown> | null {
-  if (raw.type !== "thinking") return null;
+  if (raw.type !== "thinking") {
+    return null;
+  }
   const sig = raw.thinkingSignature;
-  if (typeof sig !== "string" || !sig.startsWith("{")) return null;
+  if (typeof sig !== "string" || !sig.startsWith("{")) {
+    return null;
+  }
   try {
     const parsed = JSON.parse(sig) as Record<string, unknown>;
     if (parsed.type === "reasoning" && typeof parsed.id === "string") {
@@ -339,7 +343,9 @@ export function blockFromPart(part: MessagePartRecord): unknown {
     // If this is an OpenClaw-normalised OpenAI reasoning block, restore the original
     // OpenAI format so the Responses API gets the {type:"reasoning", id:"rs_…"} it expects.
     const restored = tryRestoreOpenAIReasoning(metadata.raw as Record<string, unknown>);
-    if (restored) return restored;
+    if (restored) {
+      return restored;
+    }
 
     // Don't return raw for tool call/result blocks — they need to go through
     // toolCallBlockFromPart/toolResultBlockFromPart which properly normalize
@@ -721,7 +727,7 @@ export class ContextAssembler {
     }
 
     return {
-      messages: sanitizeToolUseResultPairing(rawMessages) as AgentMessage[],
+      messages: sanitizeToolUseResultPairing(rawMessages),
       estimatedTokens,
       systemPromptAddition,
       stats: {

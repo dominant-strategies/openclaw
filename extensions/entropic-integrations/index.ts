@@ -1,6 +1,9 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { createCalendarListTool, createCalendarCreateTool } from "./src/calendar-tools.js";
+import {
+  createEntropicIntegrationsPluginConfigSchema,
+  resolveEntropicIntegrationsPluginConfig,
+} from "./src/config.js";
 import { createContactsListTool, createContactsSearchTool } from "./src/contacts-tools.js";
 import { createDocsReadTool, createDocsEditTool, createDocsCreateTool } from "./src/docs-tools.js";
 import {
@@ -18,6 +21,7 @@ import {
   createGmailGetTool,
   createGmailDraftTool,
 } from "./src/gmail-tools.js";
+import { configureGwsCommand } from "./src/gws.js";
 import {
   createSheetsReadTool,
   createSheetsWriteTool,
@@ -33,41 +37,47 @@ import {
 const plugin = {
   id: "entropic-integrations",
   name: "Entropic Integrations",
-  description: "OAuth bridge tools for Entropic integrations",
-  configSchema: emptyPluginConfigSchema(),
+  description:
+    "OAuth bridge tools for Entropic integrations, with gws-backed Google Workspace helpers.",
+  configSchema: () => createEntropicIntegrationsPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
+    const pluginConfig = resolveEntropicIntegrationsPluginConfig(api.pluginConfig);
+    configureGwsCommand(pluginConfig.gwsCommand);
     registerIntegrationGatewayMethods(api);
+    const registerOptionalTool = (tool: AnyAgentTool) => {
+      api.registerTool(tool, { optional: true });
+    };
     // Gmail
-    api.registerTool(createGmailSearchTool(api), { optional: true });
-    api.registerTool(createGmailGetTool(api), { optional: true });
-    api.registerTool(createGmailSendTool(api), { optional: true });
-    api.registerTool(createGmailDraftTool(api), { optional: true });
+    registerOptionalTool(createGmailSearchTool(api) as AnyAgentTool);
+    registerOptionalTool(createGmailGetTool(api) as AnyAgentTool);
+    registerOptionalTool(createGmailSendTool(api) as AnyAgentTool);
+    registerOptionalTool(createGmailDraftTool(api) as AnyAgentTool);
     // Calendar
-    api.registerTool(createCalendarListTool(api), { optional: true });
-    api.registerTool(createCalendarCreateTool(api), { optional: true });
+    registerOptionalTool(createCalendarListTool(api) as AnyAgentTool);
+    registerOptionalTool(createCalendarCreateTool(api) as AnyAgentTool);
     // Drive
-    api.registerTool(createDriveListTool(api), { optional: true });
-    api.registerTool(createDriveSearchTool(api), { optional: true });
-    api.registerTool(createDriveDownloadTool(api), { optional: true });
-    api.registerTool(createDriveUploadTool(api), { optional: true });
-    api.registerTool(createDriveShareTool(api), { optional: true });
-    api.registerTool(createDriveCreateFolderTool(api), { optional: true });
+    registerOptionalTool(createDriveListTool(api) as AnyAgentTool);
+    registerOptionalTool(createDriveSearchTool(api) as AnyAgentTool);
+    registerOptionalTool(createDriveDownloadTool(api) as AnyAgentTool);
+    registerOptionalTool(createDriveUploadTool(api) as AnyAgentTool);
+    registerOptionalTool(createDriveShareTool(api) as AnyAgentTool);
+    registerOptionalTool(createDriveCreateFolderTool(api) as AnyAgentTool);
     // Sheets
-    api.registerTool(createSheetsReadTool(api), { optional: true });
-    api.registerTool(createSheetsWriteTool(api), { optional: true });
-    api.registerTool(createSheetsCreateTool(api), { optional: true });
-    api.registerTool(createSheetsAppendTool(api), { optional: true });
+    registerOptionalTool(createSheetsReadTool(api) as AnyAgentTool);
+    registerOptionalTool(createSheetsWriteTool(api) as AnyAgentTool);
+    registerOptionalTool(createSheetsCreateTool(api) as AnyAgentTool);
+    registerOptionalTool(createSheetsAppendTool(api) as AnyAgentTool);
     // Docs
-    api.registerTool(createDocsReadTool(api), { optional: true });
-    api.registerTool(createDocsEditTool(api), { optional: true });
-    api.registerTool(createDocsCreateTool(api), { optional: true });
+    registerOptionalTool(createDocsReadTool(api) as AnyAgentTool);
+    registerOptionalTool(createDocsEditTool(api) as AnyAgentTool);
+    registerOptionalTool(createDocsCreateTool(api) as AnyAgentTool);
     // Contacts
-    api.registerTool(createContactsListTool(api), { optional: true });
-    api.registerTool(createContactsSearchTool(api), { optional: true });
+    registerOptionalTool(createContactsListTool(api) as AnyAgentTool);
+    registerOptionalTool(createContactsSearchTool(api) as AnyAgentTool);
     // Tasks
-    api.registerTool(createTasksListTool(api), { optional: true });
-    api.registerTool(createTasksCreateTool(api), { optional: true });
-    api.registerTool(createTasksUpdateTool(api), { optional: true });
+    registerOptionalTool(createTasksListTool(api) as AnyAgentTool);
+    registerOptionalTool(createTasksCreateTool(api) as AnyAgentTool);
+    registerOptionalTool(createTasksUpdateTool(api) as AnyAgentTool);
   },
 };
 

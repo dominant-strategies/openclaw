@@ -1,50 +1,25 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { getGoogleAccessToken } from "./google.js";
+import {
+  asRecord,
+  asRecordArray,
+  jsonResult,
+  readNumber,
+  readString,
+  readStringField,
+  readStringList,
+} from "./tool-utils.js";
 
 const CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3/calendars/primary";
 
-function jsonResult(payload: unknown) {
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(payload, null, 2),
-      },
-    ],
-    details: payload,
-  };
-}
-
-function readString(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params[key];
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function readNumber(
-  params: Record<string, unknown>,
-  key: string,
-  def?: number,
-): number | undefined {
-  const value = params[key];
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return def;
-}
-
 async function calendarFetch<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  headers.set("Content-Type", "application/json");
   const res = await fetch(`${CALENDAR_API_BASE}/${path}`, {
     ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
+    headers,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -74,21 +49,28 @@ export function createCalendarListTool(_api: OpenClawPluginApi) {
         orderBy: "startTime",
         maxResults: String(maxResults),
       });
-      if (timeMin) search.set("timeMin", timeMin);
-      if (timeMax) search.set("timeMax", timeMax);
+      if (timeMin) {
+        search.set("timeMin", timeMin);
+      }
+      if (timeMax) {
+        search.set("timeMax", timeMax);
+      }
 
-      const data = await calendarFetch<any>(`events?${search.toString()}`, token);
-      const events = Array.isArray(data.items)
-        ? data.items.map((item: any) => ({
-            id: item.id,
-            summary: item.summary,
-            start: item.start?.dateTime ?? item.start?.date,
-            end: item.end?.dateTime ?? item.end?.date,
-            attendees: Array.isArray(item.attendees)
-              ? item.attendees.map((a: any) => a.email).filter(Boolean)
-              : [],
-          }))
-        : [];
+      const data = await calendarFetch<Record<string, unknown>>(
+        `events?${search.toString()}`,
+        token,
+      );
+      const events = asRecordArray(data.items).map((item) => {
+        const start = asRecord(item.start);
+        const end = asRecord(item.end);
+        return {
+          id: readStringField(item, "id"),
+          summary: readStringField(item, "summary"),
+          start: readStringField(start, "dateTime") ?? readStringField(start, "date"),
+          end: readStringField(end, "dateTime") ?? readStringField(end, "date"),
+          attendees: readStringList(item.attendees, "email"),
+        };
+      });
 
       return jsonResult({ events });
     },
@@ -117,9 +99,7 @@ export function createCalendarCreateTool(_api: OpenClawPluginApi) {
       const token = await getGoogleAccessToken("google_calendar");
       const description = readString(params, "description");
       const attendees = Array.isArray(params.attendees)
-        ? (params.attendees as unknown[])
-            .filter((v) => typeof v === "string")
-            .map((v) => v as string)
+        ? params.attendees.filter((value): value is string => typeof value === "string")
         : undefined;
 
       const payload = {
@@ -130,12 +110,15 @@ export function createCalendarCreateTool(_api: OpenClawPluginApi) {
         attendees: attendees?.map((email) => ({ email })),
       };
 
-      const data = await calendarFetch<any>("events", token, {
+      const data = await calendarFetch<Record<string, unknown>>("events", token, {
         method: "POST",
         body: JSON.stringify(payload),
       });
 
-      return jsonResult({ id: data.id, status: data.status ?? "created" });
+      return jsonResult({
+        id: readStringField(data, "id"),
+        status: readStringField(data, "status") ?? "created",
+      });
     },
   };
 }

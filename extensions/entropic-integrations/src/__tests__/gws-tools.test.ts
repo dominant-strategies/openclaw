@@ -42,6 +42,12 @@ function lastGwsArgs(): string[] {
   return call[1] as string[];
 }
 
+/** Extract the command passed to execFile */
+function lastGwsCommand(): string {
+  const call = execFileMock.mock.calls[execFileMock.mock.calls.length - 1];
+  return call[0];
+}
+
 /** Extract env from last execFile call */
 function lastGwsEnv(): Record<string, string> {
   const call = execFileMock.mock.calls[execFileMock.mock.calls.length - 1];
@@ -50,21 +56,25 @@ function lastGwsEnv(): Record<string, string> {
 
 // ---- Tests ----
 
-describe("runGws helper", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+beforeEach(async () => {
+  vi.clearAllMocks();
+  const { configureGwsCommand } = await import("../gws.js");
+  configureGwsCommand(undefined);
+});
 
+describe("runGws helper", () => {
   it("passes GOOGLE_WORKSPACE_CLI_TOKEN env var", async () => {
     gwsReturns({ ok: true });
-    const { runGws } = await import("../gws.js");
+    const { runGws, configureGwsCommand } = await import("../gws.js");
+    configureGwsCommand(undefined);
     await runGws(["drive", "files", "list"]);
     expect(lastGwsEnv().GOOGLE_WORKSPACE_CLI_TOKEN).toBe("mock-token-123");
   });
 
   it("builds correct args with params and json", async () => {
     gwsReturns({ ok: true });
-    const { runGws } = await import("../gws.js");
+    const { runGws, configureGwsCommand } = await import("../gws.js");
+    configureGwsCommand(undefined);
     await runGws(["drive", "files", "list"], {
       params: { pageSize: 10, q: "trashed = false" },
       json: { test: true },
@@ -81,39 +91,53 @@ describe("runGws helper", () => {
 
   it("parses JSON stdout", async () => {
     gwsReturns({ files: [{ id: "1", name: "test.txt" }] });
-    const { runGws } = await import("../gws.js");
+    const { runGws, configureGwsCommand } = await import("../gws.js");
+    configureGwsCommand(undefined);
     const result = await runGws(["drive", "files", "list"]);
     expect(result).toEqual({ files: [{ id: "1", name: "test.txt" }] });
   });
 
   it("falls back to raw string for non-JSON output", async () => {
-    execFileMock.mockImplementation(
-      (
-        _cmd: string,
-        _args: string[],
-        _opts: unknown,
-        cb: (err: ExecFileException | null, stdout: string, stderr: string) => void,
-      ) => {
-        cb(null, "plain text response\n", "");
-      },
-    );
-    const { runGws } = await import("../gws.js");
+    execFileMock.mockImplementation(((_cmd: any, _args: any, _opts: any, cb: any) => {
+      cb(null, "plain text response\n", "");
+    }) as any);
+    const { runGws, configureGwsCommand } = await import("../gws.js");
+    configureGwsCommand(undefined);
     const result = await runGws(["test"]);
     expect(result).toBe("plain text response");
   });
 
   it("rejects with stderr on error", async () => {
     gwsFails("Permission denied");
-    const { runGws } = await import("../gws.js");
+    const { runGws, configureGwsCommand } = await import("../gws.js");
+    configureGwsCommand(undefined);
     await expect(runGws(["drive", "files", "list"])).rejects.toThrow("Permission denied");
+  });
+
+  it("supports overriding the gws command via plugin config", async () => {
+    gwsReturns({ ok: true });
+    const { runGws, configureGwsCommand } = await import("../gws.js");
+    configureGwsCommand("/opt/bin/gws");
+    await runGws(["drive", "files", "list"]);
+    expect(lastGwsCommand()).toBe("/opt/bin/gws");
+  });
+
+  it("surfaces a clear setup error when the gws binary is missing", async () => {
+    execFileMock.mockImplementation(((_cmd: any, _args: any, _opts: any, cb: any) => {
+      const err = new Error("spawn ENOENT") as ExecFileException;
+      err.code = "ENOENT";
+      cb(err, "", "");
+    }) as any);
+    const { runGws, configureGwsCommand } = await import("../gws.js");
+    configureGwsCommand(undefined);
+    await expect(runGws(["drive", "files", "list"])).rejects.toThrow(
+      'Google Workspace tools require the gws CLI. Install it and either put "gws" on PATH or configure plugins.entries.entropic-integrations.config.gwsCommand.',
+    );
   });
 });
 
 describe("drive tools", () => {
   const api = {} as any;
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
 
   describe("drive_list", () => {
     it("builds correct query with folderId", async () => {
@@ -234,7 +258,6 @@ describe("drive tools", () => {
 
 describe("sheets tools", () => {
   const api = {} as any;
-  beforeEach(() => vi.clearAllMocks());
 
   describe("sheets_read", () => {
     it("passes spreadsheetId and range as params", async () => {

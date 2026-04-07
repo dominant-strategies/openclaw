@@ -1,36 +1,30 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { runGws } from "./gws.js";
+import { asRecord, asRecordArray, jsonResult, readString, readStringField } from "./tool-utils.js";
 
-function jsonResult(payload: unknown) {
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    details: payload,
-  };
-}
-
-function readString(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params[key];
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function extractText(body: any): string {
-  if (!body?.content) return "";
+function extractText(body: unknown): string {
+  const bodyRecord = asRecord(body);
+  if (!bodyRecord?.content) {
+    return "";
+  }
   const parts: string[] = [];
-  for (const element of body.content) {
-    if (element.paragraph?.elements) {
-      for (const el of element.paragraph.elements) {
-        if (el.textRun?.content) {
-          parts.push(el.textRun.content);
+  for (const element of asRecordArray(bodyRecord.content)) {
+    const paragraph = asRecord(element.paragraph);
+    if (paragraph?.elements) {
+      for (const paragraphElement of asRecordArray(paragraph.elements)) {
+        const textRun = asRecord(paragraphElement.textRun);
+        const content = readStringField(textRun, "content");
+        if (content) {
+          parts.push(content);
         }
       }
     }
-    if (element.table) {
-      for (const row of element.table.tableRows || []) {
+    const table = asRecord(element.table);
+    if (table?.tableRows) {
+      for (const row of asRecordArray(table.tableRows)) {
         const cells: string[] = [];
-        for (const cell of row.tableCells || []) {
+        for (const cell of asRecordArray(row.tableCells)) {
           cells.push(extractText(cell));
         }
         parts.push(cells.join("\t"));
@@ -50,16 +44,20 @@ export function createDocsReadTool(_api: OpenClawPluginApi) {
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const documentId = readString(params, "documentId");
-      if (!documentId) throw new Error("documentId is required");
+      if (!documentId) {
+        throw new Error("documentId is required");
+      }
 
-      const doc = (await runGws(["docs", "documents", "get"], {
-        params: { documentId },
-      })) as any;
-      const text = extractText(doc.body);
+      const doc = asRecord(
+        await runGws(["docs", "documents", "get"], {
+          params: { documentId },
+        }),
+      );
+      const text = extractText(doc?.body);
 
       return jsonResult({
-        documentId: doc.documentId,
-        title: doc.title,
+        documentId: readStringField(doc, "documentId"),
+        title: readStringField(doc, "title"),
         content: text,
       });
     },
@@ -85,26 +83,26 @@ export function createDocsEditTool(_api: OpenClawPluginApi) {
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const documentId = readString(params, "documentId");
-      if (!documentId) throw new Error("documentId is required");
+      if (!documentId) {
+        throw new Error("documentId is required");
+      }
 
       const insertText = readString(params, "insertText");
-      const replaceText = params.replaceText as { find: string; replace: string } | undefined;
+      const replaceText = asRecord(params.replaceText);
+      const replaceFind = readStringField(replaceText, "find");
+      const replaceValue = readStringField(replaceText, "replace");
 
-      if (!insertText && !replaceText) {
+      if (!insertText && (!replaceFind || !replaceValue)) {
         throw new Error("Either insertText or replaceText is required");
       }
 
-      const requests: any[] = [];
+      const requests: Record<string, unknown>[] = [];
 
-      if (
-        replaceText &&
-        typeof replaceText.find === "string" &&
-        typeof replaceText.replace === "string"
-      ) {
+      if (replaceFind && replaceValue) {
         requests.push({
           replaceAllText: {
-            containsText: { text: replaceText.find, matchCase: true },
-            replaceText: replaceText.replace,
+            containsText: { text: replaceFind, matchCase: true },
+            replaceText: replaceValue,
           },
         });
       }
@@ -118,14 +116,16 @@ export function createDocsEditTool(_api: OpenClawPluginApi) {
         });
       }
 
-      const result = (await runGws(["docs", "documents", "batchUpdate"], {
-        params: { documentId },
-        json: { requests },
-      })) as any;
+      const result = asRecord(
+        await runGws(["docs", "documents", "batchUpdate"], {
+          params: { documentId },
+          json: { requests },
+        }),
+      );
 
       return jsonResult({
-        documentId: result.documentId,
-        replies: result.replies,
+        documentId: readStringField(result, "documentId"),
+        replies: result?.replies,
       });
     },
   };
@@ -141,15 +141,19 @@ export function createDocsCreateTool(_api: OpenClawPluginApi) {
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const title = readString(params, "title");
-      if (!title) throw new Error("title is required");
+      if (!title) {
+        throw new Error("title is required");
+      }
 
-      const data = (await runGws(["docs", "documents", "create"], {
-        json: { title },
-      })) as any;
+      const data = asRecord(
+        await runGws(["docs", "documents", "create"], {
+          json: { title },
+        }),
+      );
 
       return jsonResult({
-        documentId: data.documentId,
-        title: data.title,
+        documentId: readStringField(data, "documentId"),
+        title: readStringField(data, "title"),
       });
     },
   };

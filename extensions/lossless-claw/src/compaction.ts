@@ -820,8 +820,12 @@ export class CompactionEngine {
       typeof this.config.incrementalMaxDepth === "number" &&
       Number.isFinite(this.config.incrementalMaxDepth)
     ) {
-      if (this.config.incrementalMaxDepth < 0) return Infinity;
-      if (this.config.incrementalMaxDepth > 0) return Math.floor(this.config.incrementalMaxDepth);
+      if (this.config.incrementalMaxDepth < 0) {
+        return Infinity;
+      }
+      if (this.config.incrementalMaxDepth > 0) {
+        return Math.floor(this.config.incrementalMaxDepth);
+      }
     }
     return 0;
   }

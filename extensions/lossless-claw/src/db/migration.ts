@@ -137,7 +137,7 @@ function backfillSummaryDepths(db: DatabaseSync): void {
     while (unresolvedCondensedIds.size > 0) {
       let progressed = false;
 
-      for (const summaryId of [...unresolvedCondensedIds]) {
+      for (const summaryId of unresolvedCondensedIds) {
         const parentIds = parentsBySummaryId.get(summaryId) ?? [];
         if (parentIds.length === 0) {
           depthBySummaryId.set(summaryId, 1);

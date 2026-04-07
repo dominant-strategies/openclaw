@@ -32,6 +32,11 @@ const DIR_ID_EXCEPTIONS = new Map<string, string>([
   ["kimi-coding", "kimi"],
 ]);
 const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
+const PACKAGE_NAME_EXCEPTIONS = new Map<string, string[]>([
+  // Community-maintained plugin that is bundled in-repo but intentionally keeps
+  // its published npm identity and upstream ownership branding.
+  ["lossless-claw", ["@martian-engineering/lossless-claw"]],
+]);
 const ALLOWED_PACKAGE_SUFFIXES = [
   "",
   "-provider",
@@ -87,7 +92,10 @@ function readBundledPluginRecords(): BundledPluginRecord[] {
 }
 
 function resolveAllowedPackageNamesForId(pluginId: string): string[] {
-  return ALLOWED_PACKAGE_SUFFIXES.map((suffix) => `@openclaw/${pluginId}${suffix}`);
+  return [
+    ...ALLOWED_PACKAGE_SUFFIXES.map((suffix) => `@openclaw/${pluginId}${suffix}`),
+    ...(PACKAGE_NAME_EXCEPTIONS.get(pluginId) ?? []),
+  ];
 }
 
 function resolveBundledPluginMismatches(

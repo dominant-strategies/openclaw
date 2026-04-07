@@ -1,7 +1,7 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 export type IntegrationRecord = {
   provider: string;
@@ -26,7 +26,9 @@ const STORE_VERSION = 1;
 
 function resolveCredentialsDir(): string {
   const oauthOverride = process.env.OPENCLAW_OAUTH_DIR?.trim();
-  if (oauthOverride) return oauthOverride;
+  if (oauthOverride) {
+    return oauthOverride;
+  }
   const stateDir =
     process.env.OPENCLAW_STATE_DIR?.trim() ||
     process.env.CLAWDBOT_STATE_DIR?.trim() ||

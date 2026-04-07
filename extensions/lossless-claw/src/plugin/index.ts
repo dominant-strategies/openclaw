@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { resolveLcmConfig } from "../db/config.js";
+import { resolveLcmConfig, type LcmConfig } from "../db/config.js";
 import { createLcmDatabaseConnection } from "../db/connection.js";
 import { LcmContextEngine } from "../engine.js";
 import { logStartupBannerOnce } from "../startup-banner-log.js";
@@ -200,12 +200,6 @@ type SecretRef = {
   id: string;
 };
 
-type SecretProviderConfig = {
-  source?: string;
-  path?: string;
-  mode?: string;
-};
-
 type AuthProfileCredential =
   | { type: "api_key"; provider: string; key?: string; keyRef?: SecretRef; email?: string }
   | {
@@ -278,6 +272,10 @@ type PiAiModule = {
 /** Narrow unknown values to plain objects. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function readGatewayString(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 /** Normalize provider ids for case-insensitive matching. */
@@ -478,7 +476,7 @@ function mergeAuthProfileStores(stores: AuthProfileStore[]): AuthProfileStore | 
   for (const store of stores) {
     merged.profiles = { ...merged.profiles, ...store.profiles };
     if (store.order) {
-      merged.order = { ...(merged.order ?? {}), ...store.order };
+      merged.order = { ...merged.order, ...store.order };
     }
   }
   return merged;
@@ -538,7 +536,7 @@ function resolveAuthProfileCandidates(params: {
     const auth = params.runtimeConfig.auth;
     if (isRecord(auth)) {
       const order = findProviderConfigValue(
-        isRecord(auth.order) ? (auth.order as Record<string, unknown>) : undefined,
+        isRecord(auth.order) ? auth.order : undefined,
         params.provider,
       );
       if (Array.isArray(order)) {
@@ -583,7 +581,9 @@ function resolveSecretRef(params: {
   config?: unknown;
 }): string | undefined {
   const ref = params.ref;
-  if (!ref?.id) return undefined;
+  if (!ref?.id) {
+    return undefined;
+  }
 
   // source: env — read directly from environment variable
   if (ref.source === "env") {
@@ -620,7 +620,9 @@ function resolveSecretRef(params: {
       const parts = ref.id.replace(/^\//, "").split("/");
       let current: unknown = secrets;
       for (const part of parts) {
-        if (!current || typeof current !== "object") return undefined;
+        if (!current || typeof current !== "object") {
+          return undefined;
+        }
         current = (current as Record<string, unknown>)[part];
       }
       return typeof current === "string" && current.trim() ? current.trim() : undefined;
@@ -637,7 +639,9 @@ function resolveSecretRef(params: {
     const parts = ref.id.replace(/^\//, "").split("/");
     let current: unknown = secrets;
     for (const part of parts) {
-      if (!current || typeof current !== "object") return undefined;
+      if (!current || typeof current !== "object") {
+        return undefined;
+      }
       current = (current as Record<string, unknown>)[part];
     }
     return typeof current === "string" && current.trim() ? current.trim() : undefined;
@@ -978,11 +982,15 @@ function createLcmDependencies(api: OpenClawPluginApi): LcmDependencies {
         // detectCompat() ("Cannot read properties of undefined (reading 'includes')"),
         // and the apiKey is unresolvable, causing 401 errors.  See #19.
         const providerLevelConfig: Record<string, unknown> = (() => {
-          if (!isRecord(effectiveRuntimeConfig)) return {};
+          if (!isRecord(effectiveRuntimeConfig)) {
+            return {};
+          }
           const providers = (
             effectiveRuntimeConfig as { models?: { providers?: Record<string, unknown> } }
           ).models?.providers;
-          if (!providers) return {};
+          if (!providers) {
+            return {};
+          }
           const cfg = findProviderConfigValue(providers, providerId);
           return isRecord(cfg) ? cfg : {};
         })();
@@ -1154,8 +1162,8 @@ function createLcmDependencies(api: OpenClawPluginApi): LcmDependencies {
       switch (params.method) {
         case "agent":
           return sub.run({
-            sessionKey: String(params.params?.sessionKey ?? ""),
-            message: String(params.params?.message ?? ""),
+            sessionKey: readGatewayString(params.params?.sessionKey),
+            message: readGatewayString(params.params?.message),
             extraSystemPrompt: params.params?.extraSystemPrompt as string | undefined,
             lane: params.params?.lane as string | undefined,
             deliver: (params.params?.deliver as boolean) ?? false,
@@ -1163,17 +1171,17 @@ function createLcmDependencies(api: OpenClawPluginApi): LcmDependencies {
           });
         case "agent.wait":
           return sub.waitForRun({
-            runId: String(params.params?.runId ?? ""),
+            runId: readGatewayString(params.params?.runId),
             timeoutMs: (params.params?.timeoutMs as number) ?? params.timeoutMs,
           });
         case "sessions.get":
           return sub.getSession({
-            sessionKey: String(params.params?.key ?? ""),
+            sessionKey: readGatewayString(params.params?.key),
             limit: params.params?.limit as number | undefined,
           });
         case "sessions.delete":
           await sub.deleteSession({
-            sessionKey: String(params.params?.key ?? ""),
+            sessionKey: readGatewayString(params.params?.key),
             deleteTranscript: (params.params?.deleteTranscript as boolean) ?? true,
           });
           return {};

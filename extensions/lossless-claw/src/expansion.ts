@@ -183,7 +183,7 @@ export class ExpansionOrchestrator {
     });
 
     const summaryIds = [...grepResult.summaries]
-      .sort((a, b) => {
+      .toSorted((a, b) => {
         const recencyDelta = b.createdAt.getTime() - a.createdAt.getTime();
         if (recencyDelta !== 0) {
           return recencyDelta;

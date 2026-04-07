@@ -4,11 +4,12 @@
  * `*` matches any non-colon characters, while `**` can span colons.
  */
 export function compileSessionPattern(pattern: string): RegExp {
+  const doubleStarPlaceholder = "__OPENCLAW_DOUBLE_STAR__";
   const escaped = pattern
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*/g, "\u0000")
+    .replace(/\*\*/g, doubleStarPlaceholder)
     .replace(/\*/g, "[^:]*")
-    .replace(/\u0000/g, ".*");
+    .replaceAll(doubleStarPlaceholder, ".*");
   return new RegExp(`^${escaped}$`);
 }
 

@@ -182,7 +182,7 @@ function normalizeCompletionSummary(content: unknown): { summary: string; blockT
   collectTextLikeFields(content, chunks);
   collectBlockTypes(content, blockTypeSet);
 
-  const blockTypes = [...blockTypeSet].sort((a, b) => a.localeCompare(b));
+  const blockTypes = [...blockTypeSet].toSorted((a, b) => a.localeCompare(b));
   return {
     summary: normalizeTextFragments(chunks),
     blockTypes,
@@ -240,7 +240,21 @@ function sanitizeForDiagnostics(value: unknown, depth = 0): unknown {
     return head;
   }
   if (!isRecord(value)) {
-    return String(value);
+    if (value == null) {
+      return "";
+    }
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint"
+    ) {
+      return String(value);
+    }
+    if (typeof value === "symbol") {
+      return value.description ? `Symbol(${value.description})` : "Symbol()";
+    }
+    return Object.prototype.toString.call(value);
   }
 
   const out: Record<string, unknown> = {};
@@ -692,7 +706,9 @@ export async function createLcmSummarizeFromLegacyParams(params: {
 
   let resolvedSummary: { model: string; provider: string | undefined } | undefined;
   for (const level of summaryLevels) {
-    if (!level.model) continue;
+    if (!level.model) {
+      continue;
+    }
     if (level.model.includes("/")) {
       resolvedSummary = { model: level.model, provider: undefined };
       break;

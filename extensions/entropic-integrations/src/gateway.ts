@@ -22,7 +22,9 @@ function asNumber(value: unknown): number | undefined {
   }
   if (typeof value === "string") {
     const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) return parsed;
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
   }
   return undefined;
 }
@@ -53,7 +55,7 @@ export function registerIntegrationGatewayMethods(api: OpenClawPluginApi) {
             : undefined,
       };
 
-      await upsertIntegration(api, record);
+      upsertIntegration(api, record);
       respond(true, { ok: true, provider });
     } catch (err) {
       respond(false, { error: err instanceof Error ? err.message : String(err) });
@@ -67,7 +69,7 @@ export function registerIntegrationGatewayMethods(api: OpenClawPluginApi) {
         respond(false, { error: "provider required" });
         return;
       }
-      await removeIntegration(api, provider);
+      removeIntegration(api, provider);
       respond(true, { ok: true, provider });
     } catch (err) {
       respond(false, { error: err instanceof Error ? err.message : String(err) });

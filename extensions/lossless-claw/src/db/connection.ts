@@ -104,14 +104,14 @@ export function closeLcmConnection(target?: string | DatabaseSync): void {
     if (!entries) {
       return;
     }
-    for (const db of [...entries]) {
+    for (const db of entries) {
       closeDatabase(db);
     }
     connectionsByPath.delete(key);
     return;
   }
 
-  for (const db of [...connectionIndex.keys()]) {
+  for (const db of connectionIndex.keys()) {
     closeDatabase(db);
   }
   connectionsByPath.clear();

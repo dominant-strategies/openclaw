@@ -1,47 +1,27 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { runGws } from "./gws.js";
+import {
+  asRecord,
+  asRecordArray,
+  jsonResult,
+  readNumber,
+  readString,
+  readStringField,
+  readStringList,
+} from "./tool-utils.js";
 
-function jsonResult(payload: unknown) {
+function extractContact(person: unknown) {
+  const personRecord = asRecord(person);
+  const names = asRecordArray(personRecord?.names);
+  const orgs = asRecordArray(personRecord?.organizations);
   return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    details: payload,
-  };
-}
-
-function readString(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params[key];
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function readNumber(
-  params: Record<string, unknown>,
-  key: string,
-  def?: number,
-): number | undefined {
-  const value = params[key];
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return def;
-}
-
-function extractContact(person: any) {
-  const names = person.names || [];
-  const emails = person.emailAddresses || [];
-  const phones = person.phoneNumbers || [];
-  const orgs = person.organizations || [];
-  return {
-    resourceName: person.resourceName,
-    name: names[0]?.displayName || null,
-    emails: emails.map((e: any) => e.value).filter(Boolean),
-    phones: phones.map((p: any) => p.value).filter(Boolean),
-    organization: orgs[0]?.name || null,
-    title: orgs[0]?.title || null,
+    resourceName: readStringField(personRecord, "resourceName") ?? null,
+    name: readStringField(names[0], "displayName") ?? null,
+    emails: readStringList(personRecord?.emailAddresses),
+    phones: readStringList(personRecord?.phoneNumbers),
+    organization: readStringField(orgs[0], "name") ?? null,
+    title: readStringField(orgs[0], "title") ?? null,
   };
 }
 
@@ -58,18 +38,20 @@ export function createContactsListTool(_api: OpenClawPluginApi) {
     async execute(_id: string, params: Record<string, unknown>) {
       const pageSize = Math.min(readNumber(params, "pageSize", 20) ?? 20, 100);
 
-      const data = (await runGws(["people", "people", "connections", "list"], {
-        params: {
-          resourceName: "people/me",
-          pageSize,
-          personFields: "names,emailAddresses,phoneNumbers,organizations",
-          sortOrder: "LAST_NAME_ASCENDING",
-        },
-      })) as any;
+      const data = asRecord(
+        await runGws(["people", "people", "connections", "list"], {
+          params: {
+            resourceName: "people/me",
+            pageSize,
+            personFields: "names,emailAddresses,phoneNumbers,organizations",
+            sortOrder: "LAST_NAME_ASCENDING",
+          },
+        }),
+      );
 
       return jsonResult({
-        contacts: (data.connections || []).map(extractContact),
-        totalPeople: data.totalPeople,
+        contacts: asRecordArray(data?.connections).map(extractContact),
+        totalPeople: data?.totalPeople,
       });
     },
   };
@@ -86,19 +68,23 @@ export function createContactsSearchTool(_api: OpenClawPluginApi) {
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const query = readString(params, "query");
-      if (!query) throw new Error("query is required");
+      if (!query) {
+        throw new Error("query is required");
+      }
       const pageSize = Math.min(readNumber(params, "pageSize", 10) ?? 10, 30);
 
-      const data = (await runGws(["people", "people", "searchContacts"], {
-        params: {
-          query,
-          pageSize,
-          readMask: "names,emailAddresses,phoneNumbers,organizations",
-        },
-      })) as any;
+      const data = asRecord(
+        await runGws(["people", "people", "searchContacts"], {
+          params: {
+            query,
+            pageSize,
+            readMask: "names,emailAddresses,phoneNumbers,organizations",
+          },
+        }),
+      );
 
       return jsonResult({
-        contacts: (data.results || []).map((r: any) => extractContact(r.person)),
+        contacts: asRecordArray(data?.results).map((result) => extractContact(result.person)),
       });
     },
   };

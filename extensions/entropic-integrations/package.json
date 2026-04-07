@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/entropic-integrations",
   "version": "2026.2.6-3",
-  "description": "Entropic OAuth integration bridge",
+  "description": "Entropic OAuth integration bridge with gws-backed Google Workspace tools",
   "type": "module",
   "devDependencies": {
     "openclaw": "workspace:*"

@@ -1463,8 +1463,9 @@ export class LcmContextEngine implements ContextEngine {
     conversationId: number;
     message: AgentMessage;
   }): Promise<{ rewrittenMessage: AgentMessage; fileIds: string[] } | null> {
+    const messageRole = safeString((params.message as { role?: unknown }).role);
     if (
-      (params.message.role !== "toolResult" && params.message.role !== "tool") ||
+      (messageRole !== "toolResult" && messageRole !== "tool") ||
       !("content" in params.message)
     ) {
       return null;
@@ -1477,16 +1478,16 @@ export class LcmContextEngine implements ContextEngine {
     const rewrittenContent: unknown[] = [];
     const fileIds: string[] = [];
     let interceptedAny = false;
-    const topLevel = params.message as Record<string, unknown>;
+    const topLevel = asRecord(params.message);
     const topLevelToolCallId =
-      safeString(topLevel.toolCallId) ??
-      safeString(topLevel.tool_call_id) ??
-      safeString(topLevel.toolUseId) ??
-      safeString(topLevel.tool_use_id) ??
-      safeString(topLevel.call_id) ??
-      safeString(topLevel.id);
-    const topLevelToolName = safeString(topLevel.toolName) ?? safeString(topLevel.tool_name);
-    const topLevelIsError = safeBoolean(topLevel.isError) ?? safeBoolean(topLevel.is_error);
+      safeString(topLevel?.toolCallId) ??
+      safeString(topLevel?.tool_call_id) ??
+      safeString(topLevel?.toolUseId) ??
+      safeString(topLevel?.tool_use_id) ??
+      safeString(topLevel?.call_id) ??
+      safeString(topLevel?.id);
+    const topLevelToolName = safeString(topLevel?.toolName) ?? safeString(topLevel?.tool_name);
+    const topLevelIsError = safeBoolean(topLevel?.isError) ?? safeBoolean(topLevel?.is_error);
 
     for (const item of params.message.content) {
       if (!item || typeof item !== "object" || Array.isArray(item)) {
@@ -1494,7 +1495,11 @@ export class LcmContextEngine implements ContextEngine {
         continue;
       }
 
-      const record = item as Record<string, unknown>;
+      const record = asRecord(item);
+      if (!record) {
+        rewrittenContent.push(item);
+        continue;
+      }
       const rawType = safeString(record.type);
       const isStructuredToolResult =
         rawType !== "tool_result" && rawType !== "toolResult" && rawType !== "function_call_output";
@@ -1612,7 +1617,7 @@ export class LcmContextEngine implements ContextEngine {
     }
 
     // Fast path: one tail comparison for the common in-sync case.
-    const latestHistorical = toStoredMessage(historicalMessages[historicalMessages.length - 1]!);
+    const latestHistorical = toStoredMessage(historicalMessages[historicalMessages.length - 1]);
     const latestIdentity = messageIdentity(latestDbMessage.role, latestDbMessage.content);
     if (latestIdentity === messageIdentity(latestHistorical.role, latestHistorical.content)) {
       const dbOccurrences = await this.conversationStore.countMessagesByIdentity(
@@ -1645,7 +1650,7 @@ export class LcmContextEngine implements ContextEngine {
     const historicalIdentityCountsAfterIndex = new Map<string, number>();
     const dbIdentityCounts = new Map<string, number>();
     for (let index = historicalMessages.length - 1; index >= 0; index--) {
-      const stored = toStoredMessage(historicalMessages[index]!);
+      const stored = toStoredMessage(historicalMessages[index]);
       const identity = messageIdentity(stored.role, stored.content);
       const seenAfter = historicalIdentityCountsAfterIndex.get(identity) ?? 0;
       const total = historicalIdentityTotals.get(identity) ?? 0;
@@ -1689,7 +1694,7 @@ export class LcmContextEngine implements ContextEngine {
 
     let importedMessages = 0;
     for (let index = anchorIndex + 1; index < historicalMessages.length; index += 1) {
-      const message = historicalMessages[index]!;
+      const message = historicalMessages[index];
       const result = await this.ingestSingle({ sessionId, sessionKey: params.sessionKey, message });
       if (result.ingested) {
         importedMessages += 1;
@@ -1827,7 +1832,7 @@ export class LcmContextEngine implements ContextEngine {
 
                 const lastAppendedMessage =
                   appended.messages.length > 0
-                    ? appended.messages[appended.messages.length - 1]!
+                    ? appended.messages[appended.messages.length - 1]
                     : tailEntryMessage;
                 await persistBootstrapState(
                   conversationId,
@@ -1939,7 +1944,7 @@ export class LcmContextEngine implements ContextEngine {
             await persistBootstrapState(
               conversationId,
               historicalMessages.length > 0
-                ? toStoredMessage(historicalMessages[historicalMessages.length - 1]!)
+                ? toStoredMessage(historicalMessages[historicalMessages.length - 1])
                 : null,
             );
             return {
@@ -1953,7 +1958,7 @@ export class LcmContextEngine implements ContextEngine {
             await persistBootstrapState(
               conversationId,
               historicalMessages.length > 0
-                ? toStoredMessage(historicalMessages[historicalMessages.length - 1]!)
+                ? toStoredMessage(historicalMessages[historicalMessages.length - 1])
                 : null,
             );
           }
@@ -1978,7 +1983,7 @@ export class LcmContextEngine implements ContextEngine {
 
     // Post-bootstrap pruning: clean HEARTBEAT_OK turns that were already
     // in the DB from prior bootstrap cycles (before pruning was enabled).
-    if (this.config.pruneHeartbeatOk && result.bootstrapped === false) {
+    if (this.config.pruneHeartbeatOk && !result.bootstrapped) {
       try {
         const conversation = await this.conversationStore.getConversationForSession({
           sessionId: params.sessionId,

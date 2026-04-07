@@ -1,7 +1,7 @@
 import { getIntegration } from "./store.js";
 
 export async function getGoogleAccessToken(provider: string): Promise<string> {
-  const record = await getIntegration(provider);
+  const record = getIntegration(provider);
   if (!record) {
     throw new Error(`${provider} integration not configured`);
   }

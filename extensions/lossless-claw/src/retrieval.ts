@@ -1,14 +1,5 @@
-import type {
-  ConversationStore,
-  MessageRecord,
-  MessageSearchResult,
-} from "./store/conversation-store.js";
-import type {
-  SummaryStore,
-  SummaryRecord,
-  SummarySearchResult,
-  LargeFileRecord,
-} from "./store/summary-store.js";
+import type { ConversationStore, MessageSearchResult } from "./store/conversation-store.js";
+import type { SummaryStore, SummarySearchResult } from "./store/summary-store.js";
 
 // ── Public interfaces ────────────────────────────────────────────────────────
 

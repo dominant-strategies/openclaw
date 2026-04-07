@@ -2,36 +2,27 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { getGoogleAccessToken } from "./google.js";
 import { runGws } from "./gws.js";
+import {
+  asRecord,
+  asRecordArray,
+  jsonResult,
+  readNumber,
+  readString,
+  readStringField,
+} from "./tool-utils.js";
 
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
 const UPLOAD_API_BASE = "https://www.googleapis.com/upload/drive/v3";
 
-function jsonResult(payload: unknown) {
+function mapDriveFile(file: Record<string, unknown>) {
   return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    details: payload,
+    id: readStringField(file, "id"),
+    name: readStringField(file, "name"),
+    mimeType: readStringField(file, "mimeType"),
+    modifiedTime: readStringField(file, "modifiedTime"),
+    size: readStringField(file, "size"),
+    webViewLink: readStringField(file, "webViewLink"),
   };
-}
-
-function readString(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params[key];
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function readNumber(
-  params: Record<string, unknown>,
-  key: string,
-  def?: number,
-): number | undefined {
-  const value = params[key];
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return def;
 }
 
 export function createDriveListTool(_api: OpenClawPluginApi) {
@@ -56,28 +47,27 @@ export function createDriveListTool(_api: OpenClawPluginApi) {
       const pageSize = Math.min(readNumber(params, "pageSize", 20) ?? 20, 100);
 
       const parts: string[] = [];
-      if (query) parts.push(query);
-      if (folderId) parts.push(`'${folderId}' in parents`);
+      if (query) {
+        parts.push(query);
+      }
+      if (folderId) {
+        parts.push(`'${folderId}' in parents`);
+      }
       parts.push("trashed = false");
 
-      const data = (await runGws(["drive", "files", "list"], {
-        params: {
-          pageSize,
-          fields: "files(id,name,mimeType,modifiedTime,size,webViewLink),nextPageToken",
-          orderBy: "modifiedTime desc",
-          q: parts.join(" and "),
-        },
-      })) as any;
+      const data = asRecord(
+        await runGws(["drive", "files", "list"], {
+          params: {
+            pageSize,
+            fields: "files(id,name,mimeType,modifiedTime,size,webViewLink),nextPageToken",
+            orderBy: "modifiedTime desc",
+            q: parts.join(" and "),
+          },
+        }),
+      );
 
       return jsonResult({
-        files: (data.files || []).map((f: any) => ({
-          id: f.id,
-          name: f.name,
-          mimeType: f.mimeType,
-          modifiedTime: f.modifiedTime,
-          size: f.size,
-          webViewLink: f.webViewLink,
-        })),
+        files: asRecordArray(data?.files).map(mapDriveFile),
       });
     },
   };
@@ -97,30 +87,29 @@ export function createDriveSearchTool(_api: OpenClawPluginApi) {
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const query = readString(params, "query");
-      if (!query) throw new Error("query is required");
+      if (!query) {
+        throw new Error("query is required");
+      }
       const mimeType = readString(params, "mimeType");
       const pageSize = Math.min(readNumber(params, "pageSize", 20) ?? 20, 100);
 
       const parts = [`fullText contains '${query.replace(/'/g, "\\'")}'`, "trashed = false"];
-      if (mimeType) parts.push(`mimeType = '${mimeType}'`);
+      if (mimeType) {
+        parts.push(`mimeType = '${mimeType}'`);
+      }
 
-      const data = (await runGws(["drive", "files", "list"], {
-        params: {
-          pageSize,
-          fields: "files(id,name,mimeType,modifiedTime,size,webViewLink),nextPageToken",
-          q: parts.join(" and "),
-        },
-      })) as any;
+      const data = asRecord(
+        await runGws(["drive", "files", "list"], {
+          params: {
+            pageSize,
+            fields: "files(id,name,mimeType,modifiedTime,size,webViewLink),nextPageToken",
+            q: parts.join(" and "),
+          },
+        }),
+      );
 
       return jsonResult({
-        files: (data.files || []).map((f: any) => ({
-          id: f.id,
-          name: f.name,
-          mimeType: f.mimeType,
-          modifiedTime: f.modifiedTime,
-          size: f.size,
-          webViewLink: f.webViewLink,
-        })),
+        files: asRecordArray(data?.files).map(mapDriveFile),
       });
     },
   };
@@ -151,17 +140,22 @@ export function createDriveDownloadTool(_api: OpenClawPluginApi) {
     async execute(_id: string, params: Record<string, unknown>) {
       const token = await getGoogleAccessToken("google_workspace");
       const fileId = readString(params, "fileId");
-      if (!fileId) throw new Error("fileId is required");
+      if (!fileId) {
+        throw new Error("fileId is required");
+      }
       const requestedMime = readString(params, "mimeType");
 
-      const meta = (await runGws(["drive", "files", "get"], {
-        params: { fileId, fields: "id,name,mimeType,size" },
-      })) as any;
-      const isGoogleFormat = meta.mimeType?.startsWith("application/vnd.google-apps.");
+      const meta = asRecord(
+        await runGws(["drive", "files", "get"], {
+          params: { fileId, fields: "id,name,mimeType,size" },
+        }),
+      );
+      const metaMimeType = readStringField(meta, "mimeType") ?? "";
+      const isGoogleFormat = metaMimeType.startsWith("application/vnd.google-apps.");
 
       let content: string;
       if (isGoogleFormat) {
-        const exportMime = requestedMime || GOOGLE_DOCS_EXPORT[meta.mimeType] || "text/plain";
+        const exportMime = requestedMime || GOOGLE_DOCS_EXPORT[metaMimeType] || "text/plain";
         const res = await fetch(
           `${DRIVE_API_BASE}/files/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}`,
           {
@@ -184,7 +178,12 @@ export function createDriveDownloadTool(_api: OpenClawPluginApi) {
         content = await res.text();
       }
 
-      return jsonResult({ fileId, name: meta.name, mimeType: meta.mimeType, content });
+      return jsonResult({
+        fileId,
+        name: readStringField(meta, "name"),
+        mimeType: metaMimeType || undefined,
+        content,
+      });
     },
   };
 }
@@ -203,13 +202,17 @@ export function createDriveUploadTool(_api: OpenClawPluginApi) {
     async execute(_id: string, params: Record<string, unknown>) {
       const token = await getGoogleAccessToken("google_workspace");
       const name = readString(params, "name");
-      if (!name) throw new Error("name is required");
+      if (!name) {
+        throw new Error("name is required");
+      }
       const content = readString(params, "content") ?? "";
       const mimeType = readString(params, "mimeType") || "text/plain";
       const folderId = readString(params, "folderId");
 
-      const metadata: any = { name, mimeType };
-      if (folderId) metadata.parents = [folderId];
+      const metadata: { name: string; mimeType: string; parents?: string[] } = { name, mimeType };
+      if (folderId) {
+        metadata.parents = [folderId];
+      }
 
       const boundary = "entropic_upload_boundary";
       const body = [
@@ -241,12 +244,12 @@ export function createDriveUploadTool(_api: OpenClawPluginApi) {
         throw new Error(`Drive upload error ${res.status}: ${text}`);
       }
 
-      const data = await res.json();
+      const data = asRecord(await res.json());
       return jsonResult({
-        id: data.id,
-        name: data.name,
-        mimeType: data.mimeType,
-        webViewLink: data.webViewLink,
+        id: readStringField(data, "id"),
+        name: readStringField(data, "name"),
+        mimeType: readStringField(data, "mimeType"),
+        webViewLink: readStringField(data, "webViewLink"),
       });
     },
   };
@@ -268,9 +271,13 @@ export function createDriveShareTool(_api: OpenClawPluginApi) {
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const fileId = readString(params, "fileId");
-      if (!fileId) throw new Error("fileId is required");
+      if (!fileId) {
+        throw new Error("fileId is required");
+      }
       const email = readString(params, "email");
-      if (!email) throw new Error("email is required");
+      if (!email) {
+        throw new Error("email is required");
+      }
       const role = readString(params, "role") || "reader";
 
       const data = await runGws(["drive", "permissions", "create"], {
@@ -296,25 +303,31 @@ export function createDriveCreateFolderTool(_api: OpenClawPluginApi) {
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const name = readString(params, "name");
-      if (!name) throw new Error("name is required");
+      if (!name) {
+        throw new Error("name is required");
+      }
       const parentFolderId = readString(params, "parentFolderId");
 
-      const metadata: any = {
+      const metadata: { name: string; mimeType: string; parents?: string[] } = {
         name,
         mimeType: "application/vnd.google-apps.folder",
       };
-      if (parentFolderId) metadata.parents = [parentFolderId];
+      if (parentFolderId) {
+        metadata.parents = [parentFolderId];
+      }
 
-      const data = (await runGws(["drive", "files", "create"], {
-        params: { fields: "id,name,mimeType,webViewLink" },
-        json: metadata,
-      })) as any;
+      const data = asRecord(
+        await runGws(["drive", "files", "create"], {
+          params: { fields: "id,name,mimeType,webViewLink" },
+          json: metadata,
+        }),
+      );
 
       return jsonResult({
-        id: data.id,
-        name: data.name,
-        mimeType: data.mimeType,
-        webViewLink: data.webViewLink,
+        id: readStringField(data, "id"),
+        name: readStringField(data, "name"),
+        mimeType: readStringField(data, "mimeType"),
+        webViewLink: readStringField(data, "webViewLink"),
       });
     },
   };

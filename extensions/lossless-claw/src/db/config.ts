@@ -29,10 +29,6 @@ export type LcmConfig = {
   largeFileSummaryProvider: string;
   /** Model override for large-file text summarization. */
   largeFileSummaryModel: string;
-  /** Model override for conversation summarization. */
-  summaryModel: string;
-  /** Provider override for conversation summarization. */
-  summaryProvider: string;
   /** Provider override for lcm_expand_query sub-agent. */
   expansionProvider: string;
   /** Model override for lcm_expand_query sub-agent. */
@@ -46,19 +42,29 @@ export type LcmConfig = {
 
 /** Safely coerce an unknown value to a finite number, or return undefined. */
 function toNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
   if (typeof value === "string") {
     const n = Number(value);
-    if (Number.isFinite(n)) return n;
+    if (Number.isFinite(n)) {
+      return n;
+    }
   }
   return undefined;
 }
 
 /** Safely coerce an unknown value to a boolean, or return undefined. */
 function toBool(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") return value;
-  if (value === "true") return true;
-  if (value === "false") return false;
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
   return undefined;
 }
 

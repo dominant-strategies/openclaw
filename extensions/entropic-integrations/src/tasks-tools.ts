@@ -1,34 +1,14 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { runGws } from "./gws.js";
-
-function jsonResult(payload: unknown) {
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    details: payload,
-  };
-}
-
-function readString(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params[key];
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function readBoolean(
-  params: Record<string, unknown>,
-  key: string,
-  def?: boolean,
-): boolean | undefined {
-  const value = params[key];
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    if (value === "true") return true;
-    if (value === "false") return false;
-  }
-  return def;
-}
+import {
+  asRecord,
+  asRecordArray,
+  jsonResult,
+  readBoolean,
+  readString,
+  readStringField,
+} from "./tool-utils.js";
 
 export function createTasksListTool(_api: OpenClawPluginApi) {
   return {
@@ -48,22 +28,24 @@ export function createTasksListTool(_api: OpenClawPluginApi) {
       const taskListId = readString(params, "taskListId") || "@default";
       const showCompleted = readBoolean(params, "showCompleted", false) ?? false;
 
-      const data = (await runGws(["tasks", "tasks", "list"], {
-        params: {
-          tasklist: taskListId,
-          maxResults: 100,
-          showCompleted,
-        },
-      })) as any;
+      const data = asRecord(
+        await runGws(["tasks", "tasks", "list"], {
+          params: {
+            tasklist: taskListId,
+            maxResults: 100,
+            showCompleted,
+          },
+        }),
+      );
 
       return jsonResult({
-        tasks: (data.items || []).map((t: any) => ({
-          id: t.id,
-          title: t.title,
-          notes: t.notes || null,
-          status: t.status,
-          due: t.due || null,
-          updated: t.updated,
+        tasks: asRecordArray(data?.items).map((task) => ({
+          id: readStringField(task, "id"),
+          title: readStringField(task, "title"),
+          notes: readStringField(task, "notes") ?? null,
+          status: readStringField(task, "status"),
+          due: readStringField(task, "due") ?? null,
+          updated: readStringField(task, "updated"),
         })),
       });
     },
@@ -89,25 +71,33 @@ export function createTasksCreateTool(_api: OpenClawPluginApi) {
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const title = readString(params, "title");
-      if (!title) throw new Error("title is required");
+      if (!title) {
+        throw new Error("title is required");
+      }
       const taskListId = readString(params, "taskListId") || "@default";
 
-      const payload: any = { title };
+      const payload: Record<string, unknown> = { title };
       const notes = readString(params, "notes");
-      if (notes) payload.notes = notes;
+      if (notes) {
+        payload.notes = notes;
+      }
       const due = readString(params, "due");
-      if (due) payload.due = due;
+      if (due) {
+        payload.due = due;
+      }
 
-      const data = (await runGws(["tasks", "tasks", "insert"], {
-        params: { tasklist: taskListId },
-        json: payload,
-      })) as any;
+      const data = asRecord(
+        await runGws(["tasks", "tasks", "insert"], {
+          params: { tasklist: taskListId },
+          json: payload,
+        }),
+      );
 
       return jsonResult({
-        id: data.id,
-        title: data.title,
-        status: data.status,
-        due: data.due || null,
+        id: readStringField(data, "id"),
+        title: readStringField(data, "title"),
+        status: readStringField(data, "status"),
+        due: readStringField(data, "due") ?? null,
       });
     },
   };
@@ -131,28 +121,38 @@ export function createTasksUpdateTool(_api: OpenClawPluginApi) {
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const taskId = readString(params, "taskId");
-      if (!taskId) throw new Error("taskId is required");
+      if (!taskId) {
+        throw new Error("taskId is required");
+      }
       const taskListId = readString(params, "taskListId") || "@default";
 
-      const patch: any = {};
+      const patch: Record<string, unknown> = {};
       const title = readString(params, "title");
-      if (title) patch.title = title;
+      if (title) {
+        patch.title = title;
+      }
       const notes = readString(params, "notes");
-      if (notes !== undefined) patch.notes = notes;
+      if (notes !== undefined) {
+        patch.notes = notes;
+      }
       const status = readString(params, "status");
-      if (status) patch.status = status;
+      if (status) {
+        patch.status = status;
+      }
 
-      const data = (await runGws(["tasks", "tasks", "patch"], {
-        params: { tasklist: taskListId, task: taskId },
-        json: patch,
-      })) as any;
+      const data = asRecord(
+        await runGws(["tasks", "tasks", "patch"], {
+          params: { tasklist: taskListId, task: taskId },
+          json: patch,
+        }),
+      );
 
       return jsonResult({
-        id: data.id,
-        title: data.title,
-        status: data.status,
-        due: data.due || null,
-        updated: data.updated,
+        id: readStringField(data, "id"),
+        title: readStringField(data, "title"),
+        status: readStringField(data, "status"),
+        due: readStringField(data, "due") ?? null,
+        updated: readStringField(data, "updated"),
       });
     },
   };

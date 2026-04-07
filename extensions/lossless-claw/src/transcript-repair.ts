@@ -218,13 +218,13 @@ export function sanitizeToolUseResultPairing<T extends AgentMessageLike>(message
     // and should not have synthetic tool_results created.
     const stopReason = normalizedAssistant.stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
-      out.push(normalizedAssistant as T);
+      out.push(normalizedAssistant);
       continue;
     }
 
     const toolCalls = extractToolCallsFromAssistant(normalizedAssistant);
     if (toolCalls.length === 0) {
-      out.push(normalizedAssistant as T);
+      out.push(normalizedAssistant);
       continue;
     }
 
@@ -269,7 +269,7 @@ export function sanitizeToolUseResultPairing<T extends AgentMessageLike>(message
       }
     }
 
-    out.push(normalizedAssistant as T);
+    out.push(normalizedAssistant);
 
     if (spanResultsById.size > 0 && remainder.length > 0) {
       moved = true;
