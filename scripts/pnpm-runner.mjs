@@ -3,6 +3,8 @@ import { closeSync, openSync, readSync } from "node:fs";
 import path from "node:path";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
+const JS_PNPM_EXTENSIONS = new Set([".js", ".cjs", ".mjs"]);
+
 function getPortableBasename(value) {
   return value.split(/[/\\]/).at(-1) ?? value;
 }
@@ -34,18 +36,8 @@ function hasScriptShebang(value) {
   }
 }
 
-function isNodeRunnablePnpmExecPath(value) {
-  if (!isPnpmExecPath(value)) {
-    return false;
-  }
-  const extension = getPortableExtension(value);
-  if (extension === ".js" || extension === ".cjs" || extension === ".mjs") {
-    return true;
-  }
-  if (extension.length > 0) {
-    return false;
-  }
-  return hasScriptShebang(value);
+function isNodeLoadablePnpmExecPath(value) {
+  return JS_PNPM_EXTENSIONS.has(getPortableExtension(value));
 }
 
 export function resolvePnpmRunner(params = {}) {
@@ -57,7 +49,12 @@ export function resolvePnpmRunner(params = {}) {
   const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
 
   if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isPnpmExecPath(npmExecPath)) {
-    if (isNodeRunnablePnpmExecPath(npmExecPath)) {
+    const npmExecExtension = getPortableExtension(npmExecPath);
+
+    if (
+      isNodeLoadablePnpmExecPath(npmExecPath) ||
+      (npmExecExtension.length === 0 && hasScriptShebang(npmExecPath))
+    ) {
       return {
         command: nodeExecPath,
         args: [...nodeArgs, npmExecPath, ...pnpmArgs],
@@ -65,14 +62,6 @@ export function resolvePnpmRunner(params = {}) {
       };
     }
 
-    const npmExecExtension = getPortableExtension(npmExecPath);
-    if (platform === "win32" && npmExecExtension === ".exe") {
-      return {
-        command: npmExecPath,
-        args: pnpmArgs,
-        shell: false,
-      };
-    }
     if (platform === "win32" && npmExecExtension === ".cmd") {
       return {
         command: comSpec,
@@ -81,6 +70,12 @@ export function resolvePnpmRunner(params = {}) {
         windowsVerbatimArguments: true,
       };
     }
+
+    return {
+      command: npmExecPath,
+      args: pnpmArgs,
+      shell: false,
+    };
   }
 
   if (platform === "win32") {

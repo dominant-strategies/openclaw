@@ -70,7 +70,7 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
-  it("falls back to bare pnpm when npm_execpath points to a native pnpm binary", () => {
+  it("runs extensionless native pnpm executables directly on non-Windows", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-"));
     const npmExecPath = path.join(tempDir, "pnpm");
     writeFileSync(npmExecPath, Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
@@ -83,13 +83,28 @@ describe("resolvePnpmRunner", () => {
           platform: "linux",
         }),
       ).toEqual({
-        command: "pnpm",
+        command: npmExecPath,
         args: ["exec", "vitest", "run"],
         shell: false,
       });
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("runs extensionless pnpm executable paths directly on non-Windows", () => {
+    expect(
+      resolvePnpmRunner({
+        npmExecPath: "/Users/test/Library/pnpm/.tools/pnpm/10.17.1/bin/pnpm",
+        nodeExecPath: "/usr/local/bin/node",
+        pnpmArgs: ["build"],
+        platform: "darwin",
+      }),
+    ).toEqual({
+      command: "/Users/test/Library/pnpm/.tools/pnpm/10.17.1/bin/pnpm",
+      args: ["build"],
+      shell: false,
+    });
   });
 
   it("executes pnpm.exe directly on Windows", () => {
