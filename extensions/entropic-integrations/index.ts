@@ -1,4 +1,21 @@
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
+import {
+  createAsanaProjectCreateTool,
+  createAsanaProjectGetTool,
+  createAsanaProjectsListTool,
+  createAsanaProjectUpdateTool,
+  createAsanaSectionCreateTool,
+  createAsanaSectionsListTool,
+  createAsanaTaskCommentTool,
+  createAsanaTaskCreateTool,
+  createAsanaTaskGetTool,
+  createAsanaTaskMoveTool,
+  createAsanaTasksListTool,
+  createAsanaTasksSearchTool,
+  createAsanaTaskUpdateTool,
+  createAsanaTeamsListTool,
+  createAsanaWorkspacesListTool,
+} from "./src/asana-tools.js";
 import { createCalendarListTool, createCalendarCreateTool } from "./src/calendar-tools.js";
 import {
   createEntropicIntegrationsPluginConfigSchema,
@@ -38,7 +55,7 @@ const plugin = {
   id: "entropic-integrations",
   name: "Entropic Integrations",
   description:
-    "OAuth bridge tools for Entropic integrations, with gws-backed Google Workspace helpers.",
+    "OAuth bridge tools for Entropic integrations, including hosted Asana workflows and gws-backed Google Workspace helpers.",
   configSchema: () => createEntropicIntegrationsPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     const pluginConfig = resolveEntropicIntegrationsPluginConfig(api.pluginConfig);
@@ -47,6 +64,22 @@ const plugin = {
     const registerOptionalTool = (tool: AnyAgentTool) => {
       api.registerTool(tool, { optional: true });
     };
+    // Asana
+    registerOptionalTool(createAsanaWorkspacesListTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaTeamsListTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaProjectsListTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaProjectGetTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaProjectCreateTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaProjectUpdateTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaSectionsListTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaSectionCreateTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaTasksListTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaTasksSearchTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaTaskGetTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaTaskCreateTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaTaskUpdateTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaTaskMoveTool(api) as AnyAgentTool);
+    registerOptionalTool(createAsanaTaskCommentTool(api) as AnyAgentTool);
     // Gmail
     registerOptionalTool(createGmailSearchTool(api) as AnyAgentTool);
     registerOptionalTool(createGmailGetTool(api) as AnyAgentTool);
