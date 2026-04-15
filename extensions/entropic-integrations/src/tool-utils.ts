@@ -80,3 +80,13 @@ export function readStringList(value: unknown, key: string = "value"): string[] 
     .map((entry) => readStringField(entry, key))
     .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
 }
+
+export function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
