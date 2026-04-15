@@ -40,6 +40,36 @@ import {
 } from "./src/gmail-tools.js";
 import { configureGwsCommand } from "./src/gws.js";
 import {
+  createMicrosoftTeamsChannelGetTool,
+  createMicrosoftTeamsChannelMessagesListTool,
+  createMicrosoftTeamsChannelMessageSendTool,
+  createMicrosoftTeamsChannelsListTool,
+  createMicrosoftTeamsListTeamsTool,
+} from "./src/teams-tools.js";
+import {
+  createOneDriveBase64FileUploadTool,
+  createOneDriveDocxCreateTool,
+  createOneDriveFolderCreateTool,
+  createOneDriveItemDownloadTool,
+  createOneDriveItemContentGetTool,
+  createOneDriveItemGetTool,
+  createOneDriveItemMoveTool,
+  createOneDriveItemResolveByPathTool,
+  createOneDriveItemShareTool,
+  createOneDriveItemsListTool,
+  createOneDriveItemsSearchTool,
+  createOneDriveTextFileUploadTool,
+} from "./src/onedrive-tools.js";
+import {
+  createOutlookCalendarsListTool,
+  createOutlookEventCreateTool,
+  createOutlookEventsListTool,
+  createOutlookMailFoldersListTool,
+  createOutlookMessageGetTool,
+  createOutlookMessagesListTool,
+  createOutlookMessageSendTool,
+} from "./src/outlook-tools.js";
+import {
   createSheetsReadTool,
   createSheetsWriteTool,
   createSheetsCreateTool,
@@ -55,7 +85,7 @@ const plugin = {
   id: "entropic-integrations",
   name: "Entropic Integrations",
   description:
-    "OAuth bridge tools for Entropic integrations, including hosted Asana workflows and gws-backed Google Workspace helpers.",
+    "OAuth bridge tools for Entropic integrations, including hosted Asana, Outlook, OneDrive, Teams, and gws-backed Google Workspace helpers.",
   configSchema: () => createEntropicIntegrationsPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     const pluginConfig = resolveEntropicIntegrationsPluginConfig(api.pluginConfig);
@@ -80,6 +110,36 @@ const plugin = {
     registerOptionalTool(createAsanaTaskUpdateTool(api) as AnyAgentTool);
     registerOptionalTool(createAsanaTaskMoveTool(api) as AnyAgentTool);
     registerOptionalTool(createAsanaTaskCommentTool(api) as AnyAgentTool);
+    // Outlook
+    registerOptionalTool(createOutlookMailFoldersListTool(api) as AnyAgentTool);
+    registerOptionalTool(createOutlookMessagesListTool(api) as AnyAgentTool);
+    registerOptionalTool(createOutlookMessageGetTool(api) as AnyAgentTool);
+    registerOptionalTool(createOutlookMessageSendTool(api) as AnyAgentTool);
+    registerOptionalTool(createOutlookCalendarsListTool(api) as AnyAgentTool);
+    registerOptionalTool(createOutlookEventsListTool(api) as AnyAgentTool);
+    registerOptionalTool(createOutlookEventCreateTool(api) as AnyAgentTool);
+    // OneDrive
+    registerOptionalTool(createOneDriveItemsListTool(api) as AnyAgentTool);
+    registerOptionalTool(createOneDriveItemsSearchTool(api) as AnyAgentTool);
+    registerOptionalTool(createOneDriveItemResolveByPathTool(api) as AnyAgentTool);
+    registerOptionalTool(createOneDriveItemGetTool(api) as AnyAgentTool);
+    registerOptionalTool(createOneDriveItemContentGetTool(api) as AnyAgentTool);
+    api.registerTool((ctx) => createOneDriveItemDownloadTool(api, ctx) as AnyAgentTool, {
+      optional: true,
+      name: "onedrive_item_download",
+    });
+    registerOptionalTool(createOneDriveItemShareTool(api) as AnyAgentTool);
+    registerOptionalTool(createOneDriveFolderCreateTool(api) as AnyAgentTool);
+    registerOptionalTool(createOneDriveTextFileUploadTool(api) as AnyAgentTool);
+    registerOptionalTool(createOneDriveBase64FileUploadTool(api) as AnyAgentTool);
+    registerOptionalTool(createOneDriveDocxCreateTool(api) as AnyAgentTool);
+    registerOptionalTool(createOneDriveItemMoveTool(api) as AnyAgentTool);
+    // Microsoft Teams
+    registerOptionalTool(createMicrosoftTeamsListTeamsTool(api) as AnyAgentTool);
+    registerOptionalTool(createMicrosoftTeamsChannelsListTool(api) as AnyAgentTool);
+    registerOptionalTool(createMicrosoftTeamsChannelGetTool(api) as AnyAgentTool);
+    registerOptionalTool(createMicrosoftTeamsChannelMessagesListTool(api) as AnyAgentTool);
+    registerOptionalTool(createMicrosoftTeamsChannelMessageSendTool(api) as AnyAgentTool);
     // Gmail
     registerOptionalTool(createGmailSearchTool(api) as AnyAgentTool);
     registerOptionalTool(createGmailGetTool(api) as AnyAgentTool);
