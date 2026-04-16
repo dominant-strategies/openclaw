@@ -1,17 +1,12 @@
 import { Buffer } from "node:buffer";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { getGoogleAccessToken } from "./google.js";
+import { callGmailAction } from "./gmail-client.js";
 import {
-  asRecord,
-  asRecordArray,
   jsonResult,
   readNumber,
   readString,
-  readStringField,
 } from "./tool-utils.js";
-
-const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 function isAscii(value: string): boolean {
   for (const char of value) {
@@ -22,34 +17,12 @@ function isAscii(value: string): boolean {
   return true;
 }
 
-function findHeaderValue(headers: unknown, headerName: string): string {
-  const header = asRecordArray(headers).find(
-    (entry) => readStringField(entry, "name") === headerName,
-  );
-  return readStringField(header, "value") ?? "";
-}
-
 function encodeHeader(value: string): string {
   if (isAscii(value)) {
     return value;
   }
   const encoded = Buffer.from(value, "utf8").toString("base64");
   return `=?UTF-8?B?${encoded}?=`;
-}
-
-async function gmailFetch<T>(path: string, token: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  headers.set("Authorization", `Bearer ${token}`);
-  headers.set("Content-Type", "application/json");
-  const res = await fetch(`${GMAIL_API_BASE}/${path}`, {
-    ...init,
-    headers,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Gmail API error ${res.status}: ${text}`);
-  }
-  return res.json() as Promise<T>;
 }
 
 export function createGmailSearchTool(_api: OpenClawPluginApi) {
@@ -68,33 +41,12 @@ export function createGmailSearchTool(_api: OpenClawPluginApi) {
     async execute(_id: string, params: Record<string, unknown>) {
       const query = readString(params, "query") || "in:inbox";
       const maxResults = readNumber(params, "maxResults", 10) ?? 10;
-      const token = await getGoogleAccessToken("google_email");
-
-      const list = await gmailFetch<{
-        messages?: Array<{ id: string; threadId: string }>;
-        resultSizeEstimate?: number;
-      }>(`messages?maxResults=${maxResults}&q=${encodeURIComponent(query)}`, token);
-
-      const messages = list.messages || [];
-      const details = await Promise.all(
-        messages.map(async (msg) => {
-          const data = await gmailFetch<Record<string, unknown>>(
-            `messages/${msg.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
-            token,
-          );
-          const payload = asRecord(data.payload);
-          return {
-            id: readStringField(data, "id"),
-            threadId: readStringField(data, "threadId"),
-            subject: findHeaderValue(payload?.headers, "Subject"),
-            from: findHeaderValue(payload?.headers, "From"),
-            date: findHeaderValue(payload?.headers, "Date"),
-            snippet: readStringField(data, "snippet"),
-          };
+      return jsonResult(
+        await callGmailAction("search_messages", {
+          query,
+          maxResults,
         }),
       );
-
-      return jsonResult({ query, resultSizeEstimate: list.resultSizeEstimate, messages: details });
     },
   };
 }
@@ -116,12 +68,12 @@ export function createGmailGetTool(_api: OpenClawPluginApi) {
         throw new Error("id required");
       }
       const format = readString(params, "format") || "metadata";
-      const token = await getGoogleAccessToken("google_email");
-      const data = await gmailFetch<Record<string, unknown>>(
-        `messages/${msgId}?format=${encodeURIComponent(format)}`,
-        token,
+      return jsonResult(
+        await callGmailAction("get_message", {
+          id: msgId,
+          format,
+        }),
       );
-      return jsonResult(data);
     },
   };
 }
@@ -186,17 +138,11 @@ export function createGmailSendTool(_api: OpenClawPluginApi) {
         .replace(/\//g, "_")
         .replace(/=+$/, "");
 
-      const token = await getGoogleAccessToken("google_email");
-      const result = await gmailFetch<Record<string, unknown>>("messages/send", token, {
-        method: "POST",
-        body: JSON.stringify({ raw: encodedEmail }),
-      });
-
-      return jsonResult({
-        id: readStringField(result, "id"),
-        threadId: readStringField(result, "threadId"),
-        status: "sent",
-      });
+      return jsonResult(
+        await callGmailAction("send_message", {
+          raw: encodedEmail,
+        }),
+      );
     },
   };
 }
@@ -261,14 +207,11 @@ export function createGmailDraftTool(_api: OpenClawPluginApi) {
         .replace(/\//g, "_")
         .replace(/=+$/, "");
 
-      const token = await getGoogleAccessToken("google_email");
-      const result = await gmailFetch<Record<string, unknown>>("drafts", token, {
-        method: "POST",
-        body: JSON.stringify({ message: { raw: encodedEmail } }),
-      });
-
-      const resultId = readStringField(result, "id");
-      return jsonResult({ id: resultId, draftId: resultId, status: "draft_created" });
+      return jsonResult(
+        await callGmailAction("create_draft", {
+          raw: encodedEmail,
+        }),
+      );
     },
   };
 }
