@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { callOutlookAction, type OutlookAction } from "./outlook-client.js";
 import {
   jsonResult,
@@ -11,6 +14,97 @@ import {
 
 async function runOutlookTool(action: OutlookAction, params: Record<string, unknown>) {
   return jsonResult(await callOutlookAction(action, params));
+}
+
+const OUTLOOK_ATTACHMENT_MIME_BY_EXT: Record<string, string> = {
+  ".csv": "text/csv",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".gif": "image/gif",
+  ".html": "text/html",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".json": "application/json",
+  ".md": "text/markdown",
+  ".pdf": "application/pdf",
+  ".png": "image/png",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".svg": "image/svg+xml",
+  ".txt": "text/plain",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".xml": "application/xml",
+  ".zip": "application/zip",
+};
+
+function resolveWorkspaceFilePath(params: {
+  workspaceDir: string;
+  rawPath: string;
+}) {
+  const workspaceRoot = path.resolve(params.workspaceDir);
+  const trimmed = params.rawPath.trim();
+  if (!trimmed) {
+    throw new Error("attachmentPaths entries must not be empty");
+  }
+
+  let candidate = trimmed;
+  if (path.isAbsolute(candidate)) {
+    candidate = path.normalize(candidate);
+  } else {
+    candidate = path.resolve(workspaceRoot, candidate);
+  }
+
+  const relative = path.relative(workspaceRoot, candidate);
+  if (
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error(`Attachment path must stay inside the current workspace: ${trimmed}`);
+  }
+
+  return {
+    absolutePath: candidate,
+    relativePath: relative || path.basename(candidate),
+  };
+}
+
+function detectAttachmentMime(filePath: string) {
+  const ext = path.extname(filePath).toLowerCase();
+  return OUTLOOK_ATTACHMENT_MIME_BY_EXT[ext] || "application/octet-stream";
+}
+
+async function readWorkspaceAttachments(
+  ctx: OpenClawPluginToolContext | undefined,
+  rawPaths: string[],
+) {
+  const workspaceDir = ctx?.workspaceDir?.trim();
+  if (!workspaceDir) {
+    throw new Error("Workspace path is unavailable, so attachments cannot be loaded.");
+  }
+
+  const attachments = [];
+  for (const rawPath of rawPaths) {
+    const { absolutePath, relativePath } = resolveWorkspaceFilePath({
+      workspaceDir,
+      rawPath,
+    });
+    const stat = await fs.stat(absolutePath).catch(() => null);
+    if (!stat || !stat.isFile()) {
+      throw new Error(`Attachment not found in workspace: ${rawPath}`);
+    }
+    const bytes = await fs.readFile(absolutePath);
+    attachments.push({
+      name: path.basename(absolutePath),
+      contentType: detectAttachmentMime(absolutePath),
+      contentBase64: bytes.toString("base64"),
+      sizeBytes: bytes.byteLength,
+      workspacePath: relativePath,
+    });
+  }
+
+  return attachments;
 }
 
 function readPageParams(params: Record<string, unknown>) {
@@ -90,11 +184,14 @@ export function createOutlookMessageGetTool(_api: OpenClawPluginApi) {
   };
 }
 
-export function createOutlookMessageSendTool(_api: OpenClawPluginApi) {
+export function createOutlookMessageSendTool(
+  _api: OpenClawPluginApi,
+  ctx?: OpenClawPluginToolContext,
+) {
   return {
     name: "outlook_message_send",
     label: "Outlook Message Send",
-    description: "Send an Outlook email message.",
+    description: "Send an Outlook email message, optionally with attachments from the current workspace.",
     parameters: Type.Object({
       to: Type.Array(Type.String({ description: "Primary recipient email address." })),
       cc: Type.Optional(Type.Array(Type.String({ description: "CC recipient email address." }))),
@@ -106,6 +203,14 @@ export function createOutlookMessageSendTool(_api: OpenClawPluginApi) {
       saveToSentItems: Type.Optional(
         Type.Boolean({ description: "Whether Outlook should keep a copy in Sent Items." }),
       ),
+      attachmentPaths: Type.Optional(
+        Type.Array(
+          Type.String({
+            description:
+              "Workspace file paths to attach, relative to the current workspace or absolute under /data/workspace.",
+          }),
+        ),
+      ),
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const to = readStringArray(params.to);
@@ -114,15 +219,21 @@ export function createOutlookMessageSendTool(_api: OpenClawPluginApi) {
       const subject = readString(params, "subject");
       const body = readString(params, "body");
       const saveToSentItems = readBoolean(params, "saveToSentItems");
+      const attachmentPaths = readStringArray(params.attachmentPaths);
       if (!subject || !body || to.length === 0) {
         throw new Error("to, subject, and body are required");
       }
+      const attachments =
+        attachmentPaths.length > 0
+          ? await readWorkspaceAttachments(ctx, attachmentPaths)
+          : [];
       return runOutlookTool("send_message", {
         to,
         ...(cc.length > 0 ? { cc } : {}),
         ...(bcc.length > 0 ? { bcc } : {}),
         subject,
         body,
+        ...(attachments.length > 0 ? { attachments } : {}),
         ...(saveToSentItems !== undefined ? { saveToSentItems } : {}),
       });
     },

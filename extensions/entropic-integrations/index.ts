@@ -114,7 +114,10 @@ const plugin = {
     registerOptionalTool(createOutlookMailFoldersListTool(api) as AnyAgentTool);
     registerOptionalTool(createOutlookMessagesListTool(api) as AnyAgentTool);
     registerOptionalTool(createOutlookMessageGetTool(api) as AnyAgentTool);
-    registerOptionalTool(createOutlookMessageSendTool(api) as AnyAgentTool);
+    api.registerTool((ctx) => createOutlookMessageSendTool(api, ctx) as AnyAgentTool, {
+      optional: true,
+      name: "outlook_message_send",
+    });
     registerOptionalTool(createOutlookCalendarsListTool(api) as AnyAgentTool);
     registerOptionalTool(createOutlookEventsListTool(api) as AnyAgentTool);
     registerOptionalTool(createOutlookEventCreateTool(api) as AnyAgentTool);
