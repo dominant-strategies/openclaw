@@ -37,7 +37,7 @@ type GatewayRequestContextParams = {
   chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
   chatRunBuffers: GatewayRequestContext["chatRunBuffers"];
   chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"];
-  chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"];
+  chatDeltaLastBroadcastSignature: GatewayRequestContext["chatDeltaLastBroadcastSignature"];
   addChatRun: GatewayRequestContext["addChatRun"];
   removeChatRun: GatewayRequestContext["removeChatRun"];
   subscribeSessionEvents: GatewayRequestContext["subscribeSessionEvents"];
@@ -133,7 +133,7 @@ export function createGatewayRequestContext(
     chatAbortedRuns: params.chatAbortedRuns,
     chatRunBuffers: params.chatRunBuffers,
     chatDeltaSentAt: params.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
+    chatDeltaLastBroadcastSignature: params.chatDeltaLastBroadcastSignature,
     addChatRun: params.addChatRun,
     removeChatRun: params.removeChatRun,
     subscribeSessionEvents: params.subscribeSessionEvents,

@@ -49,7 +49,7 @@ describe("startGatewayEarlyRuntime", () => {
       chatRunState: { abortedRuns: new Map() },
       chatRunBuffers: new Map(),
       chatDeltaSentAt: new Map(),
-      chatDeltaLastBroadcastLen: new Map(),
+      chatDeltaLastBroadcastSignature: new Map(),
       removeChatRun: () => {},
       agentRunSeq: new Map(),
       nodeSendToSession: () => {},
