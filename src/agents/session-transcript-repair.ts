@@ -440,7 +440,7 @@ type ToolUseRepairReport = {
 
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
-  _options?: ToolUseResultPairingOptions,
+  options?: ToolUseResultPairingOptions,
 ): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
   // immediately followed by matching tool results. Session files can end up with results
@@ -589,9 +589,8 @@ export function repairToolUseResultPairing(
     // Aborted/errored assistant turns should never synthesize missing tool results, but
     // the replay sanitizer can still legitimately retain real tool results for surviving
     // tool calls in the same turn after malformed siblings are dropped.
-    const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
-      if (!shouldDropErroredAssistantResults(options)) {
+      if (options?.erroredAssistantResultPolicy !== "drop") {
         out.push(msg);
         for (const toolCall of toolCalls) {
           const result = spanResultsById.get(toolCall.id);

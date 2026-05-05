@@ -66,20 +66,35 @@ export function createChatRunRegistry(): ChatRunRegistry {
 export type ChatRunState = {
   registry: ChatRunRegistry;
   rawBuffers: Map<string, string>;
-  buffers: Map<string, string>;
+  buffers: Map<string, ChatMessageBuffer>;
   deltaSentAt: Map<string, number>;
-  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
-  deltaLastBroadcastLen: Map<string, number>;
+  /** Signature of the last broadcast assistant payload, used to avoid duplicate flushes. */
+  deltaLastBroadcastSignature: Map<string, string>;
   abortedRuns: Map<string, number>;
   clear: () => void;
+};
+
+export type ChatToolCallBuffer = {
+  toolCallId: string;
+  name: string;
+  phase: string;
+  isError: boolean;
+  argsText?: string;
+  detailText?: string;
+};
+
+export type ChatMessageBuffer = {
+  text: string;
+  reasoningText: string;
+  toolCalls: ChatToolCallBuffer[];
 };
 
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
-  const buffers = new Map<string, string>();
+  const buffers = new Map<string, ChatMessageBuffer>();
   const deltaSentAt = new Map<string, number>();
-  const deltaLastBroadcastLen = new Map<string, number>();
+  const deltaLastBroadcastSignature = new Map<string, string>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
@@ -87,7 +102,7 @@ export function createChatRunState(): ChatRunState {
     rawBuffers.clear();
     buffers.clear();
     deltaSentAt.clear();
-    deltaLastBroadcastLen.clear();
+    deltaLastBroadcastSignature.clear();
     abortedRuns.clear();
   };
 
@@ -96,7 +111,7 @@ export function createChatRunState(): ChatRunState {
     rawBuffers,
     buffers,
     deltaSentAt,
-    deltaLastBroadcastLen,
+    deltaLastBroadcastSignature,
     abortedRuns,
     clear,
   };

@@ -5,6 +5,7 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import {
+  type ReadConfigFileSnapshotWithPluginMetadataResult,
   type OpenClawConfig,
   applyConfigOverrides,
   getRuntimeConfig,
@@ -75,9 +76,10 @@ import {
   loadGatewayStartupConfigSnapshot,
   prepareGatewayStartupConfig,
 } from "./server-startup-config.js";
+import { startGatewayEarlyRuntime } from "./server-startup-early.js";
 import { prepareGatewayPluginBootstrap } from "./server-startup-plugins.js";
+import { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
-import { startGatewayEarlyRuntime, startGatewayPostAttachRuntime } from "./server-startup.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
 import {
@@ -87,7 +89,7 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
-import { resolveHookClientIpConfig } from "./server/hooks.js";
+import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -203,6 +205,10 @@ export type GatewayServerOptions = {
    * Optional startup timestamp used for concise readiness logging.
    */
   startupStartedAt?: number;
+  /**
+   * Optional config snapshot already read by the CLI before loading the gateway module.
+   */
+  startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 };
 
 export async function startGatewayServer(
@@ -223,10 +229,14 @@ export async function startGatewayServer(
     description: "raw stream log path override",
   });
 
-  const configSnapshot = await loadGatewayStartupConfigSnapshot({
+  const startupConfigSnapshotLoad = await loadGatewayStartupConfigSnapshot({
     minimalTestGateway,
     log,
+    ...(opts.startupConfigSnapshotRead
+      ? { initialSnapshotRead: opts.startupConfigSnapshotRead }
+      : {}),
   });
+  const configSnapshot = startupConfigSnapshotLoad.snapshot;
 
   const emitSecretsStateEvent = (
     code: "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED",
@@ -431,6 +441,7 @@ export async function startGatewayServer(
     httpServer,
     httpServers,
     httpBindHosts,
+    startListening,
     wss,
     preauthConnectionBudget,
     clients,
@@ -645,6 +656,7 @@ export async function startGatewayServer(
     const gatewayRequestContext = createGatewayRequestContext({
       deps,
       runtimeState,
+      getRuntimeConfig,
       execApprovalManager,
       pluginApprovalManager,
       loadGatewayModelCatalog,
@@ -743,6 +755,7 @@ export async function startGatewayServer(
       broadcast,
       context: gatewayRequestContext,
     });
+    await startListening();
     ({
       stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
       tailscaleCleanup: runtimeState.tailscaleCleanup,

@@ -151,7 +151,7 @@ const makeContext = (): GatewayRequestContext =>
     chatAbortControllers: new Map(),
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
+    chatDeltaLastBroadcastSignature: new Map(),
     chatAbortedRuns: new Map(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
