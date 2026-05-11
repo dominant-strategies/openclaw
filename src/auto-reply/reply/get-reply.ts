@@ -502,7 +502,6 @@ export async function getReplyFromConfig(
     groupResolution,
     isGroup,
     triggerBodyNormalized,
-    resetTriggered,
     commandAuthorized,
     defaultProvider,
     defaultModel,
