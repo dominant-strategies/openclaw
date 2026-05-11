@@ -24,7 +24,10 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'issue_comment' || !(endsWith(github.actor, '[bot]') && (github.event.action == 'labeled' || github.event.action == 'unlabeled')) }}
+    # Targets openclaw-org GitHub App (Iv23liOECG0slfuhz093) and dispatches into
+    # openclaw/clawsweeper. Skip on forks and downstream repos that lack those
+    # secrets and dispatch targets.
+    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name == 'issue_comment' || !(endsWith(github.actor, '[bot]') && (github.event.action == 'labeled' || github.event.action == 'unlabeled'))) }}
     env:
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
       CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093

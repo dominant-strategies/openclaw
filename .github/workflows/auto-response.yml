@@ -19,6 +19,10 @@ permissions: {}
 
 jobs:
   auto-response:
+    # Requires openclaw-org GitHub Apps (Barnacle 2729701 / fallback 2971289)
+    # and their private-key secrets. Skip on forks and downstream repos that
+    # don't have those secrets configured.
+    if: github.repository == 'openclaw/openclaw'
     permissions:
       contents: read
       issues: write
