@@ -422,9 +422,7 @@ export async function resolveReplyDirectives(params: {
     directives.verboseLevel ??
     (targetSessionEntry?.verboseLevel as VerboseLevel | undefined) ??
     (agentCfg?.verboseDefault as VerboseLevel | undefined);
-  const sessionReasoningLevel = targetSessionEntry?.reasoningLevel as
-    | ReasoningLevel
-    | undefined;
+  const sessionReasoningLevel = targetSessionEntry?.reasoningLevel as ReasoningLevel | undefined;
   let resolvedReasoningLevel: ReasoningLevel =
     directives.reasoningLevel ??
     (sessionReasoningLevel === "off"
@@ -542,6 +540,7 @@ export async function resolveReplyDirectives(params: {
     cfg,
     agentId,
     agentDir,
+    workspaceDir,
     agentCfg,
     agentEntry,
     sessionEntry: targetSessionEntry,
