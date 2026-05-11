@@ -38,7 +38,10 @@ jobs:
   security-high:
     name: Security High (${{ matrix.category }})
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security') }}
-    runs-on: ${{ matrix.runs_on }}
+    # Use blacksmith self-hosted runners only in openclaw/openclaw where they're
+    # available; fall back to GitHub-hosted ubuntu-24.04 for forks and
+    # downstream repos so the job is not stuck in queue until the 24h timeout.
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && matrix.runs_on || 'ubuntu-24.04' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
